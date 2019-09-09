@@ -417,7 +417,7 @@ Eigen::Matrix<double, 6, 1> ForceCtrlReconstruct::PID(
   f_err_prev_ = force_err;
 
   f_err_int_ += period.toSec() * force_err;
-  f_err_int_ = ForceCtrlReconstruct::antiWindup(f_err_int_);
+  f_err_int_ = antiWindup(f_err_int_);
 
   Eigen::Matrix<double, 6, 1> u_p, u_i, u_d;
   u_p.setZero();
@@ -522,17 +522,17 @@ Eigen::Matrix<double, 6, 1> ForceCtrlReconstruct::impedanceOpenLoop(
   //         + imp_m_ * (accRefGlob - accGlobal)  
   //         + imp_d_ * (velRefGlob - velGlobal) 
   //         + imp_k_ * dXglobal.block(0,0,3,1));
-
+  
   force = (imp_m_ / imp_scale_ - 1.0) * f_ext.block<3,1>(0,0) 
               // - imp_m_ * accRefGlob
-              - (imp_m_ / imp_scale_) * (imp_d_ * (velGlobal - velRefGlob)
+               - (imp_m_ / imp_scale_) * (imp_d_ * (velGlobal - velRefGlob)
                 - imp_k_ * dXglobal.block(0,0,3,1));
 
   force_torque.setZero();
 
   for(int i = 0; i < 3; i++) {
     force_torque[i] = force[i];
-    // force_torque[i+3] = moments[i];
+    force_torque[i+3] = moments[i];
   }
 
   pos_global_prev_ = posGlobal;

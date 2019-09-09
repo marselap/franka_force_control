@@ -532,7 +532,7 @@ Eigen::Matrix<double, 6, 1> ForceExampleController::impedanceOpenLoop(
 
   for(int i = 0; i < 3; i++) {
     force_torque[i] = force[i];
-    // force_torque[i+3] = moments[i];
+    force_torque[i+3] = moments[i];
   }
 
   pos_global_prev_ = posGlobal;
