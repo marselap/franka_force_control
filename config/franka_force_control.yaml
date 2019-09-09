@@ -1,0 +1,16 @@
+model_example_controller:
+    type: franka_force_control/ModelExampleController
+    arm_id: panda
+
+force_example_controller:
+    type: franka_force_control/ForceExampleController
+    arm_id: panda
+    joint_names:
+        - panda_joint1
+        - panda_joint2
+        - panda_joint3
+        - panda_joint4
+        - panda_joint5
+        - panda_joint6
+        - panda_joint7
+
