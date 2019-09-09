@@ -1,45 +1,15 @@
 <library path="lib/libfranka_force_control">
-  <class name="franka_force_control/JointVelocityExampleController" type="franka_force_control::JointVelocityExampleController" base_class_type="controller_interface::ControllerBase">
-    <description>
-      A controller that executes a short motion based on joint velocities to demonstrate correct usage
-    </description>
-  </class>
-  <class name="franka_force_control/JointPositionExampleController" type="franka_force_control::JointPositionExampleController" base_class_type="controller_interface::ControllerBase">
-    <description>
-      A controller that executes a short motion based on joint positions to demonstrate correct usage
-    </description>
-  </class>
-  <class name="franka_force_control/CartesianPoseExampleController" type="franka_force_control::CartesianPoseExampleController" base_class_type="controller_interface::ControllerBase">
-    <description>
-      A controller that executes a short motion based on cartesian poses to demonstrate correct usage
-    </description>
-  </class>
-  <class name="franka_force_control/CartesianVelocityExampleController" type="franka_force_control::CartesianVelocityExampleController" base_class_type="controller_interface::ControllerBase">
-    <description>
-      A controller that executes a short motion based on cartesian velocities to demonstrate correct usage
-    </description>
-  </class>
-  <class name="franka_force_control/ElbowExampleController" type="franka_force_control::ElbowExampleController" base_class_type="controller_interface::ControllerBase">
-    <description>
-      A controller that executes a short motion based on cartesian poses and elbow to demonstrate correct usage
-    </description>
-  </class>
   <class name="franka_force_control/ModelExampleController" type="franka_force_control::ModelExampleController" base_class_type="controller_interface::ControllerBase">
     <description>
       A controller that evaluates and prints the dynamic model of Franka
     </description>
   </class>
-  <class name="franka_force_control/JointImpedanceExampleController" type="franka_force_control::JointImpedanceExampleController" base_class_type="controller_interface::ControllerBase">
-    <description>
-      A controller that tracks a cartesian path with a joint impedance controller that compensates coriolis torques. The torque commands are compared to measured torques in Console outputs.
-    </description>
-  </class>
-  <class name="franka_force_control/CartesianImpedanceExampleController" type="franka_force_control::CartesianImpedanceExampleController" base_class_type="controller_interface::ControllerBase">
-    <description>
-      A controller that renders a spring damper system in cartesian space. Compliance parameters and the equilibrium pose can be modified online with dynamic reconfigure and an interactive marker respectively. 
-    </description>
-  </class>
   <class name="franka_force_control/ForceExampleController" type="franka_force_control::ForceExampleController" base_class_type="controller_interface::ControllerBase">
+    <description>
+      A PI controller that applies a force corresponding to a user-provided desired mass in the z axis. The desired mass value can be modified online with dynamic reconfigure. 
+    </description>
+  </class>
+  <class name="franka_force_control/ForceCtrlReconstruct" type="franka_force_control::ForceCtrlReconstruct" base_class_type="controller_interface::ControllerBase">
     <description>
       A PI controller that applies a force corresponding to a user-provided desired mass in the z axis. The desired mass value can be modified online with dynamic reconfigure. 
     </description>

@@ -53,6 +53,7 @@ catkin_package(
 add_library(franka_force_control
   src/model_example_controller.cpp
   src/force_example_controller.cpp
+  src/force_ctrl_reconstruct.cpp
   src/median_filter.cpp
   src/Tf1.cpp
 )
