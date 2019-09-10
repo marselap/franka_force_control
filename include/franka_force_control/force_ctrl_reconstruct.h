@@ -170,7 +170,7 @@ class ForceCtrlReconstruct : public controller_interface::MultiInterfaceControll
 
   int wiggle_timer_{0};
   Eigen::Matrix<double, 3, 1> wiggle_moments_;
-  Eigen::Matrix<double, 3, 1> wiggle(float velocity_amplitude, float loc_d_x_);
+  Eigen::Matrix<double, 3, 1> wiggle(float velocity_amplitude);
   float vel_ampl_prev_{0.};
 };
 

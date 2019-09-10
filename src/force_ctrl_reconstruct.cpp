@@ -514,7 +514,7 @@ Eigen::Matrix<double, 6, 1> ForceCtrlReconstruct::impedanceOpenLoop(
   Eigen::Matrix<double, 3, 1> momentsLoc, moments;
   moments.setZero();
   if (impRefAmpl > 0.1) {
-    momentsLoc = wiggle(velAmpl, loc_d_x_);
+    momentsLoc = wiggle(velAmpl);
     moments = R_base * momentsLoc;
   }
 
@@ -553,7 +553,7 @@ Eigen::Matrix<double, 6, 1> ForceCtrlReconstruct::impedanceOpenLoop(
 }
 
 
-Eigen::Matrix<double, 3, 1> ForceCtrlReconstruct::wiggle(float velocity_amplitude, float loc_d_x_) {
+Eigen::Matrix<double, 3, 1> ForceCtrlReconstruct::wiggle(float velocity_amplitude) {
   
   if (wiggle_timer_ >= 200) {
     Eigen::Matrix<double, 3, 1> rand_vec;

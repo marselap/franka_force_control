@@ -25,6 +25,7 @@
 #include <franka_hw/franka_cartesian_command_interface.h>
 
 #include "std_msgs/Float32MultiArray.h"
+#include "std_msgs/Bool.h"
 #include "geometry_msgs/WrenchStamped.h"
 #include "geometry_msgs/Point.h"
 
@@ -57,7 +58,7 @@ class ForceExampleController : public controller_interface::MultiInterfaceContro
           force_des_pub, force_pid_pub, force_nof_pub, force_ref_pub,
           force_cor_pub;
   ros::Publisher pos_ref_glob_pub, pos_glob_pub;
-  ros::Subscriber reset_sub_, force_torque_ref_, impedance_pos_ref_;
+  ros::Subscriber reset_sub_, force_torque_ref_, impedance_pos_ref_, gripper_type_sub_;
   std::unique_ptr<franka_hw::FrankaModelHandle> model_handle_;
   std::unique_ptr<franka_hw::FrankaStateHandle> state_handle_;
   std::vector<hardware_interface::JointHandle> joint_handles_;
@@ -137,6 +138,9 @@ class ForceExampleController : public controller_interface::MultiInterfaceContro
   void ft_ref_callback(const geometry_msgs::WrenchStamped::ConstPtr& msg);
   void imp_pos_ref_callback(const geometry_msgs::Point::ConstPtr& msg);
 
+  void gripper_type_callback(const std_msgs::Bool::ConstPtr& msg);
+  bool gripper_rigid_{false};
+
   Eigen::Matrix<double, 6, 1> PID(Eigen::Matrix<double, 6, 1> measured, 
                                   Eigen::Matrix<double, 6, 1> desired,
                                   const ros::Duration& period);
@@ -170,8 +174,11 @@ class ForceExampleController : public controller_interface::MultiInterfaceContro
 
   int wiggle_timer_{0};
   Eigen::Matrix<double, 3, 1> wiggle_moments_;
-  Eigen::Matrix<double, 3, 1> wiggle(float velocity_amplitude, float loc_d_x_);
   float vel_ampl_prev_{0.};
+  Eigen::Matrix<double, 3, 1> wiggle(float velocity_amplitude);
+
+  Eigen::VectorXd polyfit(Eigen::VectorXd xvals, Eigen::VectorXd yvals,int order);
+
 };
 
 }  // namespace franka_force_control

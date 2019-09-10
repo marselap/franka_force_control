@@ -23,8 +23,7 @@ bool ForceExampleController::init(hardware_interface::RobotHW* robot_hw,
   std::vector<std::string> joint_names;
   std::string arm_id;
   ROS_WARN(
-      "ForceExampleController: Make sure your robot's endeffector is in contact "
-      "with a horizontal surface before starting the controller!");
+      "ForceExampleController: Assuming SOFT gripper!");
   if (!node_handle.getParam("arm_id", arm_id)) {
     ROS_ERROR("ForceExampleController: Could not read parameter arm_id");
     return false;
@@ -147,8 +146,15 @@ bool ForceExampleController::init(hardware_interface::RobotHW* robot_hw,
     &ForceExampleController::ft_ref_callback, this);
   impedance_pos_ref_ = node_handle.subscribe("/exploration_direction", 1, 
     &ForceExampleController::imp_pos_ref_callback, this);
+  gripper_type_sub_ = node_handle.subscribe("/gripper_rigid", 1, 
+    &ForceExampleController::gripper_type_callback, this);
 
   return true;
+}
+
+void ForceExampleController::gripper_type_callback(
+  const std_msgs::Bool::ConstPtr& msg) {
+  gripper_rigid_ = msg->data;
 }
 
 void ForceExampleController::reset_callback(
@@ -485,7 +491,7 @@ Eigen::Matrix<double, 6, 1> ForceExampleController::impedanceOpenLoop(
     velRefLoc(i) = dXlocal(i);
   } 
   dxAmpl = sqrt(dxAmpl);
-  if (dxAmpl > 0.1) {
+  if (dxAmpl >= 0.1) {
     velRefLoc = 0.2 * velRefLoc / dxAmpl;
   }
 
@@ -513,8 +519,8 @@ Eigen::Matrix<double, 6, 1> ForceExampleController::impedanceOpenLoop(
 
   Eigen::Matrix<double, 3, 1> momentsLoc, moments;
   moments.setZero();
-  if (impRefAmpl > 0.1) {
-    momentsLoc = wiggle(velAmpl, loc_d_x_);
+  if (impRefAmpl >= 0.1) {
+    momentsLoc = wiggle(velAmpl);
     moments = R_base * momentsLoc;
   }
 
@@ -532,7 +538,11 @@ Eigen::Matrix<double, 6, 1> ForceExampleController::impedanceOpenLoop(
 
   for(int i = 0; i < 3; i++) {
     force_torque[i] = force[i];
-    force_torque[i+3] = moments[i];
+    if (gripper_rigid_ == false) {
+      force_torque[i+3] = 0.5*moments[i];
+    }
+    else
+      force_torque[i+3] = moments[i];
   }
 
   pos_global_prev_ = posGlobal;
@@ -553,7 +563,7 @@ Eigen::Matrix<double, 6, 1> ForceExampleController::impedanceOpenLoop(
 }
 
 
-Eigen::Matrix<double, 3, 1> ForceExampleController::wiggle(float velocity_amplitude, float loc_d_x_) {
+Eigen::Matrix<double, 3, 1> ForceExampleController::wiggle(float velocity_amplitude) {
   
   if (wiggle_timer_ >= 200) {
     Eigen::Matrix<double, 3, 1> rand_vec;
@@ -568,18 +578,33 @@ Eigen::Matrix<double, 3, 1> ForceExampleController::wiggle(float velocity_amplit
 
     float predznak = -1.;
     
-    if (loc_d_x_ < 0.) {
-      predznak *= -1.;
-    }
-    if (prob > 0.4) {
-      predznak *= -1.;
-    }
+    if (loc_d_x_ != 0.) {
+      if (loc_d_x_ < 0.) {
+        predznak *= -1.;
+      }
+      if (prob > 0.4) {
+        predznak *= -1.;
+      }
 
 
-    rand_vec[0] = 0.3 * rand_vec[0];
-    rand_vec[1] = predznak * fabs(rand_vec[1]);
-    rand_vec[2] = 0.3 * rand_vec[2];
-    
+      rand_vec[0] = 0.3 * rand_vec[0];
+      rand_vec[1] = predznak * fabs(rand_vec[1]);
+      rand_vec[2] = 0.3 * rand_vec[2];
+    }
+
+    if (loc_d_y_ != 0.) {
+      if (loc_d_y_ > 0.) {
+        predznak *= -1.;
+      }
+      if (prob > 0.4) {
+        predznak *= -1.;
+      }
+
+      rand_vec[0] = predznak * fabs(rand_vec[0]);
+      rand_vec[1] = 0.3 * (rand_vec[1]);
+      rand_vec[2] = 0.3 * rand_vec[2];
+    }
+
 
     for(int i = 0; i < 3; i++){
       rand_vec_ampl += pow(rand_vec[i], 2.);
@@ -712,6 +737,28 @@ Eigen::Matrix<double, 7, 1> ForceExampleController::saturateTorqueRate(
     tau_d_saturated[i] = tau_J_d[i] + std::max(std::min(difference, kDeltaTauMax), -kDeltaTauMax);
   }
   return tau_d_saturated;
+}
+
+
+Eigen::VectorXd ForceExampleController::polyfit(Eigen::VectorXd xvals, Eigen::VectorXd yvals,int order) 
+{
+  assert(xvals.size() == yvals.size());
+  assert(order >= 1 && order <= xvals.size() - 1);
+  Eigen::MatrixXd A(xvals.size(), order + 1);
+
+  for (int i = 0; i < xvals.size(); i++) {
+    A(i, 0) = 1.0;
+  }
+
+  for (int j = 0; j < xvals.size(); j++) {
+    for (int i = 0; i < order; i++) {
+      A(j, i + 1) = A(j, i) * xvals(j);
+    }
+  }
+
+  auto Q = A.householderQr();
+  auto result = Q.solve(yvals);
+  return result;
 }
 
 }  // namespace franka_force_control
