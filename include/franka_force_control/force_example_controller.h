@@ -18,6 +18,7 @@
 #include <ros/node_handle.h>
 #include <ros/time.h>
 #include <Eigen/Core>
+#include <Eigen/Dense>
 #include <Eigen/Geometry>
 
 
@@ -178,6 +179,10 @@ class ForceExampleController : public controller_interface::MultiInterfaceContro
   Eigen::Matrix<double, 3, 1> wiggle(float velocity_amplitude);
 
   Eigen::VectorXd polyfit(Eigen::VectorXd xvals, Eigen::VectorXd yvals,int order);
+
+  int polyfit_history{1};
+  Eigen::MatrixXd history_pos_;
+  Eigen::VectorXd directionPrediction(Eigen::VectorXd position);
 
 };
 

@@ -15,6 +15,10 @@
 
 #define LO -1.0
 #define HI 1.0
+#define N_ORDER 3
+#define MIN_DIST_ 0.01
+#define MAX_HIST_LEN_ 1000
+
 
 namespace franka_force_control {
 
@@ -237,11 +241,15 @@ void ForceExampleController::starting(const ros::Time& /*time*/) {
 
   posGlEE_prev_.setZero();
 
+  history_pos_.setZero(3,MAX_HIST_LEN_);
+
+  history_pos_.block(0,MAX_HIST_LEN_-1,3,1) = pos_global_prev_;
 
 
 }
 
 void ForceExampleController::update(const ros::Time& /*time*/, const ros::Duration& period) {
+  
   franka::RobotState robot_state = state_handle_->getRobotState();
 
   franka::RobotMode mode_ = robot_state.robot_mode;
@@ -290,7 +298,14 @@ void ForceExampleController::update(const ros::Time& /*time*/, const ros::Durati
   Eigen::Matrix<double, 6, 1> force_pid, force_imp;
   force_imp.setZero();
 
+
+  Eigen::VectorXd position(3), incline(3);
+  position << T_base_arr[12], T_base_arr[13], T_base_arr[14];
+
+
   if (mode_ == franka::RobotMode::kMove && period.toSec() > 0.) {
+
+    incline = ForceExampleController::directionPrediction(position);
 
     force_imp = ForceExampleController::impedanceOpenLoop(period, force_meas);
 
@@ -738,6 +753,77 @@ Eigen::Matrix<double, 7, 1> ForceExampleController::saturateTorqueRate(
   }
   return tau_d_saturated;
 }
+
+
+
+Eigen::VectorXd ForceExampleController::directionPrediction(Eigen::VectorXd position) {
+
+  int n = MAX_HIST_LEN_-1;
+
+  history_pos_.block(0,0,3,MAX_HIST_LEN_-1) = history_pos_.block(0,1,3,MAX_HIST_LEN_-1);
+  history_pos_.block(0,MAX_HIST_LEN_-1,3,1) = position;
+
+  if (polyfit_history < MAX_HIST_LEN_) {
+    polyfit_history += 1;
+  }
+
+  float dist = 0.;
+  float dist_1 = 0.;
+
+  Eigen::VectorXd cum_dist = Eigen::VectorXd::Zero(n+1);
+
+  int i_points = 0;
+  while ((fabs(dist) < MIN_DIST_) && (i_points < polyfit_history-1)) {
+    dist_1 = 0.;
+    for (int i = 0; i < 3; i++) {
+      dist_1 += pow(history_pos_(i, n-i_points) - history_pos_(i, n-(i_points+1)), 2);
+    }
+    cum_dist(i_points) = cum_dist(i_points-1) + sqrt(dist_1);
+    dist += (cum_dist(i_points-1) - cum_dist(i_points));
+    i_points++;
+  }
+
+
+  polyfit_history = i_points + 1;
+
+  bool standing_still = false;
+
+  if (fabs(dist) < MIN_DIST_) {
+    standing_still = true;
+  }
+
+
+  Eigen::VectorXd incline;
+  incline.setZero(3,1);
+
+
+  if (not standing_still) {
+
+    Eigen::VectorXd dimension(polyfit_history);
+    Eigen::VectorXd timeparam(polyfit_history);
+
+    for (int i = 0; i < polyfit_history-1; i++) {
+      timeparam(i) = cum_dist(i) / cum_dist(i_points-1);
+    }
+
+    Eigen::MatrixXd coeffs(N_ORDER+1, 3);
+    coeffs.setZero(N_ORDER+1, 3);
+      
+    for(int i = 0; i < 3; i++){
+      dimension = history_pos_.block(i, MAX_HIST_LEN_-polyfit_history, 1, polyfit_history).transpose();
+      coeffs.col(i) = ForceExampleController::polyfit(timeparam, dimension, N_ORDER);
+      incline(i) = -coeffs(2,i);
+    }
+
+    std::cout << (incline / incline.norm()).transpose() << std::endl;
+  }
+
+  return incline;
+
+
+
+}
+
 
 
 Eigen::VectorXd ForceExampleController::polyfit(Eigen::VectorXd xvals, Eigen::VectorXd yvals,int order) 
