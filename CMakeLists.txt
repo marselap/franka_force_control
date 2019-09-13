@@ -47,6 +47,7 @@ catkin_package(
     realtime_tools
     roscpp
     franka_control
+    visualization_msgs
   DEPENDS Franka
 )
 

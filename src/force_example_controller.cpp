@@ -16,9 +16,9 @@
 #define LO -1.0
 #define HI 1.0
 #define N_ORDER 3
-#define MIN_DIST_ 0.01
-#define MAX_HIST_LEN_ 1000
-
+#define MIN_DIST_ 0.1
+#define MAX_HIST_LEN_ 15
+#define MIN_DIST_THRES_ 0.01
 
 namespace franka_force_control {
 
@@ -120,6 +120,16 @@ bool ForceExampleController::init(hardware_interface::RobotHW* robot_hw,
     ros::param::get("/imp_scale_", imp_scale_);
     target_imp_scale_ = imp_scale_;
   }
+  if (ros::param::has("/imp_scale_m_")) {
+    ros::param::get("/imp_scale_m_", imp_scale_m_);
+    target_imp_scale_m_ = imp_scale_m_;
+  }
+  if (ros::param::has("/imp_scale_m_i_")) {
+    ros::param::get("/imp_scale_m_i_", imp_scale_m_i_);
+    target_imp_scale_m_i_ = imp_scale_m_i_;
+  }
+
+
 
   dynamic_reconfigure_desired_mass_param_node_ =
       ros::NodeHandle("dynamic_reconfigure_desired_mass_param_node");
@@ -153,6 +163,10 @@ bool ForceExampleController::init(hardware_interface::RobotHW* robot_hw,
   gripper_type_sub_ = node_handle.subscribe("/gripper_rigid", 1, 
     &ForceExampleController::gripper_type_callback, this);
 
+
+  marker_pos_ = node_handle.advertise<visualization_msgs::Marker>("/franka_pos", 1);
+  marker_pip_ = node_handle.advertise<visualization_msgs::Marker>("/pipe_ori", 1);
+
   return true;
 }
 
@@ -164,6 +178,9 @@ void ForceExampleController::gripper_type_callback(
 void ForceExampleController::reset_callback(
   const franka_control::ErrorRecoveryActionGoal&  msg) {
   f_err_int_.setZero();
+  polyfit_history = 0;
+  flag_reset_ = 0;
+  moments_integrate_.setZero();
 }
 
 void ForceExampleController::ft_ref_callback(
@@ -245,7 +262,13 @@ void ForceExampleController::starting(const ros::Time& /*time*/) {
 
   history_pos_.block(0,MAX_HIST_LEN_-1,3,1) = pos_global_prev_;
 
+  incline_.setZero(3,1);
+  target_incline_.setZero(3,1);
 
+  cummulative_dist_.setZero(MAX_HIST_LEN_);
+  distances_.setZero(MAX_HIST_LEN_);
+
+  moments_integrate_.setZero(3);
 }
 
 void ForceExampleController::update(const ros::Time& /*time*/, const ros::Duration& period) {
@@ -255,7 +278,7 @@ void ForceExampleController::update(const ros::Time& /*time*/, const ros::Durati
   franka::RobotMode mode_ = robot_state.robot_mode;
 
   std::array<double, 16> T_base_arr = robot_state.O_T_EE;
-
+  Eigen::Map<Eigen::Matrix<double, 4, 4>> T_base(T_base_arr.data());
   std::array<double, 42> jacobian_array =
       model_handle_->getZeroJacobian(franka::Frame::kEndEffector);
   std::array<double, 7> gravity_array = model_handle_->getGravity();
@@ -300,17 +323,109 @@ void ForceExampleController::update(const ros::Time& /*time*/, const ros::Durati
 
 
   Eigen::VectorXd position(3), incline(3);
-  position << T_base_arr[12], T_base_arr[13], T_base_arr[14];
+  Eigen::VectorXd pos_loc(4), pos_glob(4);
+  pos_loc[0] = 0;
+  pos_loc[1] = -0.03;
+  pos_loc[2] = 0.03;
+  pos_loc[3] = 1;
+  pos_glob = T_base * pos_loc;
+  position = pos_glob.block(0,0,3,1);
 
+  // position << T_base_arr[12], T_base_arr[13], T_base_arr[14];
 
   if (mode_ == franka::RobotMode::kMove && period.toSec() > 0.) {
 
-    incline = ForceExampleController::directionPrediction(position);
+    if (pipe_dir_freq_ == 0) {
+      pipe_dir_freq_ = 20;
+      incline = ForceExampleController::directionPrediction(position);
+      target_incline_ = incline;
+    }
+    else {
+      pipe_dir_freq_ -= 1;
+    }
 
-    force_imp = ForceExampleController::impedanceOpenLoop(period, force_meas);
+
+    incline_ = 0.9 * incline_ + 0.1 * target_incline_;
+
+
+    force_imp = ForceExampleController::impedanceOpenLoop(period, force_meas, incline_);
 
     force_pid = ForceExampleController::PID(force_meas, force_des + force_imp, period);
     // force_pid = ForceExampleController::PID(force_meas, force_des , period);
+
+
+    if (count_markers_ == 100) {
+      marker_id_ += 1;
+      visualization_msgs::Marker marker_pos, marker_pip;
+      uint32_t shape = visualization_msgs::Marker::SPHERE;
+      marker_pos.header.frame_id = "/my_frame";
+      marker_pos.header.stamp = ros::Time::now();
+      marker_pos.ns = "position";
+      marker_pos.id = marker_id_;
+      marker_pos.type = shape;
+      marker_pos.action = visualization_msgs::Marker::ADD;
+      marker_pos.pose.position.x = position[0];
+      marker_pos.pose.position.y = position[1];
+      marker_pos.pose.position.z = position[2];
+      marker_pos.pose.orientation.x = 0.0;
+      marker_pos.pose.orientation.y = 0.0;
+      marker_pos.pose.orientation.z = 0.0;
+      marker_pos.pose.orientation.w = 1.0;
+      marker_pos.scale.x = 0.01;
+      marker_pos.scale.y = 0.01;
+      marker_pos.scale.z = 0.01;
+      marker_pos.color.r = 0.0f;
+      marker_pos.color.g = 1.0f;
+      marker_pos.color.b = 0.0f;
+      marker_pos.color.a = 1.0;
+      marker_pos.lifetime = ros::Duration();
+      marker_pos_.publish(marker_pos);
+
+      shape = visualization_msgs::Marker::ARROW;
+      marker_pip.header.frame_id = "/my_frame";
+      marker_pip.header.stamp = ros::Time::now();
+      marker_pip.ns = "orientation";
+      marker_pip.id = 0;
+      marker_pip.type = shape;
+      marker_pip.action = visualization_msgs::Marker::ADD;
+      // marker_pip.pose.position.x = position[0];
+      // marker_pip.pose.position.y = position[1];
+      // marker_pip.pose.position.z = position[2];
+      // marker_pip.pose.orientation.x = 0.0;
+      // marker_pip.pose.orientation.y = 0.0;
+      // marker_pip.pose.orientation.z = 0.0;
+      // marker_pip.pose.orientation.w = 1.0;
+      marker_pip.scale.x = 0.005;
+      marker_pip.scale.y = 0.001;
+      marker_pip.scale.z = 0.001;
+      marker_pip.color.r = 1.0f;
+      marker_pip.color.g = 0.0f;
+      marker_pip.color.b = 0.0f;
+      marker_pip.color.a = 1.0;
+      // std::cout << "aaaaaaaa11" << std::endl;
+
+      marker_pip.points.resize(2);
+      
+      marker_pip.points[0].x = position[0];
+      marker_pip.points[0].y = position[1];
+      marker_pip.points[0].z = position[2];
+
+      marker_pip.points[1].x = position[0] + incline_[0]/incline_.norm();
+      marker_pip.points[1].y = position[1] + incline_[1]/incline_.norm();
+      marker_pip.points[1].z = position[2] + incline_[2]/incline_.norm();
+      
+      // std::cout << "aaaaaaaa22" << std::endl;
+      marker_pip.lifetime = ros::Duration();
+      marker_pip_.publish(marker_pip);
+
+
+      count_markers_ = 0;
+    }
+    else {
+      count_markers_++;
+    }
+
+
 
     // Update signals changed online through dynamic reconfigure
     desired_x_ = filter_gain_ * target_x_ + (1 - filter_gain_) * desired_x_;
@@ -349,6 +464,9 @@ void ForceExampleController::update(const ros::Time& /*time*/, const ros::Durati
 
     imp_scale_ = target_imp_scale_;
 
+    imp_scale_m_ = target_imp_scale_m_; 
+    imp_scale_m_i_ = target_imp_scale_m_i_; 
+    
 
   }
   else {
@@ -470,7 +588,7 @@ Eigen::Matrix<double, 6, 1> ForceExampleController::antiWindup(Eigen::Matrix<dou
 
 
 Eigen::Matrix<double, 6, 1> ForceExampleController::impedanceOpenLoop(
-              const ros::Duration& period, Eigen::Matrix<double, 6, 1> f_ext){
+              const ros::Duration& period, Eigen::Matrix<double, 6, 1> f_ext, Eigen::VectorXd incline){
 
 
   Eigen::Matrix<double, 6, 1> force_torque;
@@ -532,11 +650,12 @@ Eigen::Matrix<double, 6, 1> ForceExampleController::impedanceOpenLoop(
   velAmpl = sqrt(velAmpl);
   impRefAmpl = sqrt(impRefAmpl);
 
-  Eigen::Matrix<double, 3, 1> momentsLoc, moments;
+  Eigen::Matrix<double, 3, 1> momentsLoc, moments, moments_wiggle;
   moments.setZero();
+  moments_wiggle.setZero();
   if (impRefAmpl >= 0.1) {
     momentsLoc = wiggle(velAmpl);
-    moments = R_base * momentsLoc;
+    moments_wiggle = R_base * momentsLoc;
   }
 
   // force = imp_scale_ * (- imp_f_ * f_ext.block<3,1>(0,0)
@@ -549,29 +668,65 @@ Eigen::Matrix<double, 6, 1> ForceExampleController::impedanceOpenLoop(
               - (imp_m_ / imp_scale_) * (imp_d_ * (velGlobal - velRefGlob)
                 - imp_k_ * dXglobal.block(0,0,3,1));
 
+
+  Eigen::VectorXd refDirLoc(3), refDirGlob(3);
+
+  if (velRefGlob.norm() > 0.) {
+    refDirLoc << loc_d_x_, loc_d_y_, loc_d_z_;
+    refDirLoc /= refDirLoc.norm();
+    refDirGlob = R_base * refDirLoc;
+    
+
+    moments_integrate_ = moments_integrate_ + (incline-refDirGlob) * period.toSec();
+
+    double integrator_limit_moments = integrator_limit_/3.0;
+    for(int i = 0; i < 3; i++) {
+      if (moments_integrate_[i] > integrator_limit_moments)
+        moments_integrate_[i] = integrator_limit_moments;
+      if (moments_integrate_[i] < - integrator_limit_moments)
+        moments_integrate_[i] = -integrator_limit_moments;
+    }
+
+    moments = imp_scale_m_ * (incline - refDirGlob) + imp_scale_m_i_ * moments_integrate_;     
+  }
+  else {
+    refDirLoc.setZero();
+    refDirGlob.setZero();
+    moments.setZero();
+  }
+
   force_torque.setZero();
 
   for(int i = 0; i < 3; i++) {
     force_torque[i] = force[i];
     if (gripper_rigid_ == false) {
-      force_torque[i+3] = 0.5*moments[i];
+      force_torque[i+3] = moments[i] + 0.5 * moments_wiggle[i];
     }
     else
-      force_torque[i+3] = moments[i];
+      force_torque[i+3] = moments[i] + moments_wiggle[i];
   }
 
   pos_global_prev_ = posGlobal;
   vel_global_prev_ = velGlobal;
 
+
+
   std_msgs::Float32MultiArray array_dxglob, array_posglob;
   for(int i = 0; i < 3; i++) {
-    array_dxglob.data.push_back(dXglobal[i]);
-    array_dxglob.data.push_back(velGlobal[i]);
-    array_posglob.data.push_back(posGlobal[i]);
+    array_dxglob.data.push_back(incline[i] - refDirGlob[i]);
+    array_dxglob.data.push_back(moments_integrate_[i]);
+    array_posglob.data.push_back(moments[i]);
+    // array_dxglob.data.push_back(dXglobal[i]);
+    // array_dxglob.data.push_back(velGlobal[i]);
+    // array_posglob.data.push_back(posGlobal[i]);
   }
+
+
   array_dxglob.data.push_back(velAmpl);
   pos_ref_glob_pub.publish(array_dxglob);
   pos_glob_pub.publish(array_posglob);
+
+
 
   return force_torque;
 
@@ -588,7 +743,6 @@ Eigen::Matrix<double, 3, 1> ForceExampleController::wiggle(float velocity_amplit
       // rand_vec_ampl += pow(rand_vec[i], 2.);
     }
 
-
     float prob = static_cast <float> (rand()) /( static_cast <float> (RAND_MAX));
 
     float predznak = -1.;
@@ -600,13 +754,10 @@ Eigen::Matrix<double, 3, 1> ForceExampleController::wiggle(float velocity_amplit
       if (prob > 0.4) {
         predznak *= -1.;
       }
-
-
       rand_vec[0] = 0.3 * rand_vec[0];
       rand_vec[1] = predznak * fabs(rand_vec[1]);
       rand_vec[2] = 0.3 * rand_vec[2];
     }
-
     if (loc_d_y_ != 0.) {
       if (loc_d_y_ > 0.) {
         predznak *= -1.;
@@ -614,20 +765,16 @@ Eigen::Matrix<double, 3, 1> ForceExampleController::wiggle(float velocity_amplit
       if (prob > 0.4) {
         predznak *= -1.;
       }
-
       rand_vec[0] = predznak * fabs(rand_vec[0]);
       rand_vec[1] = 0.3 * (rand_vec[1]);
       rand_vec[2] = 0.3 * rand_vec[2];
     }
-
 
     for(int i = 0; i < 3; i++){
       rand_vec_ampl += pow(rand_vec[i], 2.);
     }
     rand_vec_ampl = sqrt(rand_vec_ampl);
     rand_vec /= rand_vec_ampl;
-
-    // std::cout << rand_vec.transpose() << std::endl;
 
     // // rand_vec *= 0.1;
     // // rand_vec -= wiggle_moments_;
@@ -639,11 +786,8 @@ Eigen::Matrix<double, 3, 1> ForceExampleController::wiggle(float velocity_amplit
     // rand_vec_ampl = sqrt(rand_vec_ampl);
     // rand_vec /= rand_vec_ampl;
 
-    // std::cout << rand_vec.transpose() << std::endl;  
-
     float wiggle_amplitude = 0.;
     float scale = 1.5;
-
 
     wiggle_amplitude = (1. - velocity_amplitude / 0.2);
     if (wiggle_amplitude < 0.) {
@@ -654,18 +798,15 @@ Eigen::Matrix<double, 3, 1> ForceExampleController::wiggle(float velocity_amplit
     wiggle_moments_ = rand_vec * wiggle_amplitude;
     wiggle_timer_ = 0;
   
-
     std_msgs::Float32MultiArray array_dxglob;
     array_dxglob.data.push_back(velocity_amplitude);
     array_dxglob.data.push_back(velocity_amplitude-vel_ampl_prev_);
     // pos_ref_glob_pub.publish(array_dxglob);
     vel_ampl_prev_ = velocity_amplitude;
-
   }
 
   wiggle_timer_++;
   return wiggle_moments_;
-
 }
 
 
@@ -683,6 +824,8 @@ void ForceExampleController::desiredMassParamCallback(
     config.imp_m = imp_m_;
     config.imp_f = imp_f_;
     config.scale = imp_scale_;
+    config.scale_m = imp_scale_m_;
+    config.scale_m_i = imp_scale_m_i_;
 
     config.f_p_x = ft_pid_target(0,0);
     config.f_i_x = ft_pid_target(0,1);
@@ -715,6 +858,8 @@ void ForceExampleController::desiredMassParamCallback(
     target_imp_d_ = config.imp_d;
     target_imp_k_ = config.imp_k;
     target_imp_scale_ = config.scale;
+    target_imp_scale_m_ = config.scale_m;
+    target_imp_scale_m_i_ = config.scale_m_i;
 
     target_k_p_ = config.k_p;
     target_k_i_ = config.k_i;
@@ -754,98 +899,154 @@ Eigen::Matrix<double, 7, 1> ForceExampleController::saturateTorqueRate(
   return tau_d_saturated;
 }
 
-
-
 Eigen::VectorXd ForceExampleController::directionPrediction(Eigen::VectorXd position) {
 
-  int n = MAX_HIST_LEN_-1;
+  Eigen::VectorXd new_dist_vec;
 
-  history_pos_.block(0,0,3,MAX_HIST_LEN_-1) = history_pos_.block(0,1,3,MAX_HIST_LEN_-1);
-  history_pos_.block(0,MAX_HIST_LEN_-1,3,1) = position;
+  new_dist_vec = history_pos_.block(0,MAX_HIST_LEN_-1,3,1) - position;
+  double new_dist = new_dist_vec.norm();
 
-  if (polyfit_history < MAX_HIST_LEN_) {
-    polyfit_history += 1;
-  }
+  int n = polyfit_history; // number of points
+  int len = n - 1; // largest index
 
-  float dist = 0.;
-  float dist_1 = 0.;
+  // std::cout << "new dist " << new_dist << std::endl;
 
-  Eigen::VectorXd cum_dist = Eigen::VectorXd::Zero(n+1);
-
-  int i_points = 0;
-  while ((fabs(dist) < MIN_DIST_) && (i_points < polyfit_history-1)) {
-    dist_1 = 0.;
-    for (int i = 0; i < 3; i++) {
-      dist_1 += pow(history_pos_(i, n-i_points) - history_pos_(i, n-(i_points+1)), 2);
+  if (new_dist > MIN_DIST_THRES_) {
+    history_pos_.block(0,0,3,MAX_HIST_LEN_-1) = history_pos_.block(0,1,3,MAX_HIST_LEN_-1);
+    history_pos_.block(0,MAX_HIST_LEN_-1,3,1) = position;    
+    if (polyfit_history < MAX_HIST_LEN_) {
+      polyfit_history += 1;
     }
-    cum_dist(i_points) = cum_dist(i_points-1) + sqrt(dist_1);
-    dist += (cum_dist(i_points-1) - cum_dist(i_points));
-    i_points++;
+    distances_.block(0, 0, MAX_HIST_LEN_-1, 1) = cummulative_dist_.block(1, 0, MAX_HIST_LEN_-1, 1);
+    distances_(MAX_HIST_LEN_-1) = new_dist;
+
+
+    n = polyfit_history; // number of points
+    len = n - 1; // largest index
+
+    cummulative_dist_[len] = 0.;
+    // po svim tockama osim zadnje - najnovije
+    for (int i = 1; i < n; i++) {
+      //popunjavanje od najnovije otkraja prema 0 (zapravo 1)
+      // cummulative distance -  oldest 0 --> newest polyfit_history 
+      cummulative_dist_[len - i] = cummulative_dist_[len - (i - 1)] + distances_[len - (i - 1)];
+    }
   }
 
+  // float dist = 0.;
+  // float dist_1 = 0.;
 
-  polyfit_history = i_points + 1;
+  // Eigen::VectorXd cum_dist = Eigen::VectorXd::Zero(n);
+
+  // int i_points = 0;
+  // Eigen::VectorXd resultant;
+  // while ((fabs(dist) < MIN_DIST_) && (i_points < polyfit_history-1)) {
+  //   dist_1 = 0.;
+  //   resultant = history_pos_.col(n-i_points) - history_pos_.col(n-(i_points+1));
+  //   dist_1 = resultant.norm();
+  //   // for (int i = 0; i < 3; i++) {
+
+  //   //   dist_1 += pow(history_pos_(i, n-i_points) - history_pos_(i, n-(i_points+1)), 2);
+  //   // }
+  //   cum_dist(i_points) = cum_dist(i_points-1) + sqrt(dist_1);
+  //   dist += (cum_dist(i_points-1) - cum_dist(i_points));
+  //   i_points++;
+  // }
+
+  // polyfit_history = i_points + 1;
 
   bool standing_still = false;
 
-  if (fabs(dist) < MIN_DIST_) {
-    standing_still = true;
-  }
-
+  // if (cummulative_dist_.sum() < MIN_DIST_) {
+  //   standing_still = true;
+  // }
 
   Eigen::VectorXd incline;
   incline.setZero(3,1);
-
 
   if (not standing_still) {
 
     Eigen::VectorXd dimension(polyfit_history);
     Eigen::VectorXd timeparam(polyfit_history);
 
-    for (int i = 0; i < polyfit_history-1; i++) {
-      timeparam(i) = cum_dist(i) / cum_dist(i_points-1);
+    for (int i = 0; i < n; i++) {
+      timeparam(i) = cummulative_dist_(i) / cummulative_dist_(0);
     }
 
     Eigen::MatrixXd coeffs(N_ORDER+1, 3);
     coeffs.setZero(N_ORDER+1, 3);
-      
+    
+
+
     for(int i = 0; i < 3; i++){
-      dimension = history_pos_.block(i, MAX_HIST_LEN_-polyfit_history, 1, polyfit_history).transpose();
+      dimension = history_pos_.block(i, MAX_HIST_LEN_ - n, 1, n).transpose();
       coeffs.col(i) = ForceExampleController::polyfit(timeparam, dimension, N_ORDER);
-      incline(i) = -coeffs(2,i);
+      incline(i) = - coeffs(2,i);
     }
 
-    std::cout << (incline / incline.norm()).transpose() << std::endl;
+    if (incline.norm() != 0.)
+      incline = incline / incline.norm();
+
+    if (std::isnan(incline.norm())) {
+      incline.setZero(3,1);
+      // std::cout << history_pos_ << std::endl;
+      std::cout << "NAN" << std::endl;
+    }
+
+    if (flag_reset_ < 10){
+      // int pos;
+      // double maxdist;
+      // maxdist = (cum_dist.block(1,0,cum_dist.size()-1,1)-cum_dist.block(0,0,cum_dist.size()-1,1)).maxCoeff(&pos);
+      // std::cout << "maxdist " << maxdist << " index " << pos << std::endl;
+      // // print largest dist & points around
+      // std::cout << history_pos_.block(0,MAX_HIST_LEN_-1-pos,3,1).transpose() << std::endl;
+      // std::cout << history_pos_.block(0,MAX_HIST_LEN_-1-(pos+1),3,1).transpose() << std::endl;
+      // std::cout << history_pos_.block(0,MAX_HIST_LEN_-1-(pos+2),3,1).transpose() << std::endl;
+      // std::cout << incline.transpose() << std::endl;
+      // std::cout << incline.norm() * 100. << std::endl;
+      // std::cout << history_pos_.block(0,MAX_HIST_LEN_-2,3,1).transpose() << std::endl;
+      // std::cout << history_pos_.block(0,MAX_HIST_LEN_-1,3,1).transpose() << std::endl;
+      // std::cout << "======================" << std::endl;
+      flag_reset_ += 1;
+
+    }
   }
 
   return incline;
 
-
-
 }
 
-
-
-Eigen::VectorXd ForceExampleController::polyfit(Eigen::VectorXd xvals, Eigen::VectorXd yvals,int order) 
+Eigen::VectorXd ForceExampleController::polyfit(Eigen::VectorXd t, Eigen::VectorXd y,int order) 
 {
-  assert(xvals.size() == yvals.size());
-  assert(order >= 1 && order <= xvals.size() - 1);
-  Eigen::MatrixXd A(xvals.size(), order + 1);
 
-  for (int i = 0; i < xvals.size(); i++) {
-    A(i, 0) = 1.0;
-  }
-
-  for (int j = 0; j < xvals.size(); j++) {
-    for (int i = 0; i < order; i++) {
-      A(j, i + 1) = A(j, i) * xvals(j);
-    }
-  }
-
-  auto Q = A.householderQr();
-  auto result = Q.solve(yvals);
-  return result;
+  // Initialize the coefficient matrix of \eqref{eq:polyfitlse}
+  Eigen::MatrixXd A = Eigen::MatrixXd::Ones(t.size(),order + 1);
+  for (unsigned j = 1; j < order + 1; ++j) 
+    A.col(j) = A.col(j - 1).cwiseProduct(t);
+  // Use \eigen's built-in least squares solver, see \cref{cpp:lsqsolveeigen}
+  Eigen::VectorXd coeffs = A.householderQr().solve(y);
+  // leading coefficients have low indices.
+  return coeffs.reverse();
 }
+
+//   assert(xvals.size() == yvals.size());
+//   assert(order >= 1 && order <= xvals.size() - 1);
+//   Eigen::MatrixXd A(xvals.size(), order + 1);
+
+//   for (int i = 0; i < xvals.size(); i++) {
+//     A(i, 0) = 1.0;
+//   }
+
+//   for (int j = 0; j < xvals.size(); j++) {
+//     for (int i = 0; i < order; i++) {
+//       A(j, i + 1) = A(j, i) * xvals(j);
+//     }
+//   }
+
+//   auto Q = A.householderQr();
+//   auto result = Q.solve(yvals);
+//   return result;
+// }
 
 }  // namespace franka_force_control
 

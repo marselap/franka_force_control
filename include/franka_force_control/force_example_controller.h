@@ -29,6 +29,8 @@
 #include "std_msgs/Bool.h"
 #include "geometry_msgs/WrenchStamped.h"
 #include "geometry_msgs/Point.h"
+#include "visualization_msgs/Marker.h"
+
 
 #include <franka_control/ErrorRecoveryAction.h>
 #include <franka_control/ErrorRecoveryActionGoal.h>
@@ -59,6 +61,7 @@ class ForceExampleController : public controller_interface::MultiInterfaceContro
           force_des_pub, force_pid_pub, force_nof_pub, force_ref_pub,
           force_cor_pub;
   ros::Publisher pos_ref_glob_pub, pos_glob_pub;
+  ros::Publisher marker_pos_, marker_pip_;
   ros::Subscriber reset_sub_, force_torque_ref_, impedance_pos_ref_, gripper_type_sub_;
   std::unique_ptr<franka_hw::FrankaModelHandle> model_handle_;
   std::unique_ptr<franka_hw::FrankaStateHandle> state_handle_;
@@ -165,11 +168,12 @@ class ForceExampleController : public controller_interface::MultiInterfaceContro
   double count_time_{0.0};
   Eigen::Matrix<double, 3, 1> pos_global_prev_, vel_global_prev_;
   Eigen::Matrix<double, 4, 1> dXglobal_;
-  double imp_f_{0.1}, imp_m_{3.}, imp_d_{31.6228}, imp_k_{50.}, imp_scale_{5.0};
-  double target_imp_f_{0.}, target_imp_m_{0.}, target_imp_d_{10.}, target_imp_k_{2.5}, target_imp_scale_{4.0};
+  double imp_f_{0.1}, imp_m_{3.}, imp_d_{31.6228}, imp_k_{50.}, imp_scale_{5.0}, imp_scale_m_{0.0}, imp_scale_m_i_{0.0};
+  double target_imp_f_{0.}, target_imp_m_{0.}, target_imp_d_{10.}, target_imp_k_{2.5}, target_imp_scale_{4.0}, target_imp_scale_m_{0.0}, target_imp_scale_m_i_{0.0};
   
   Eigen::Matrix<double, 6, 1> impedanceOpenLoop(const ros::Duration& period, 
-                                                Eigen::Matrix<double, 6, 1> f_ext);
+                                                Eigen::Matrix<double, 6, 1> f_ext, 
+                                                Eigen::VectorXd incline);
 
   Eigen::Matrix<double, 4, 1> posGlEE_prev_;
 
@@ -180,10 +184,18 @@ class ForceExampleController : public controller_interface::MultiInterfaceContro
 
   Eigen::VectorXd polyfit(Eigen::VectorXd xvals, Eigen::VectorXd yvals,int order);
 
-  int polyfit_history{1};
+  int polyfit_history{0};
   Eigen::MatrixXd history_pos_;
   Eigen::VectorXd directionPrediction(Eigen::VectorXd position);
+  int flag_reset_{10};
+  Eigen::VectorXd incline_, target_incline_;
+  Eigen::VectorXd moments_integrate_;
+  Eigen::VectorXd cummulative_dist_, distances_;
 
+  int marker_id_{0};
+  int count_markers_{0};
+
+  int pipe_dir_freq_{20};
 };
 
 }  // namespace franka_force_control

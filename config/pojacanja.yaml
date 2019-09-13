@@ -13,3 +13,6 @@ imp_scale_: 5.0
 imp_m_: 4.9 #3.0
 
 imp_f_: 0.1
+
+imp_scale_m_: 0.0 #0.5 #rigid0.5 soft?
+imp_scale_m_i_: 0.0 #0.05 # rigid 0.05 soft ?
