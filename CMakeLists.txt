@@ -55,7 +55,10 @@ add_library(franka_force_control
   src/model_example_controller.cpp
   src/force_example_controller.cpp
   src/force_ctrl_reconstruct.cpp
+  src/cartesian_pose_example_controller.cpp
+
   src/median_filter.cpp
+  src/Tf2.cpp
   src/Tf1.cpp
 )
 
@@ -97,7 +100,7 @@ install(FILES franka_force_control_plugin.xml
   DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION}
 )
 catkin_install_python(
-  PROGRAMS scripts/interactive_marker.py scripts/move_to_start.py
+  PROGRAMS scripts/interactive_marker.py scripts/move_to_start.py scripts/publishpoints.py
   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )
 
@@ -113,7 +116,7 @@ if(CLANG_TOOLS)
   )
   add_format_target(franka_force_control FILES ${SOURCES} ${HEADERS})
   add_tidy_target(franka_force_control
-    FILES ${SOURCES}
+    FILES ${SOURCES} 
     DEPENDS franka_force_control
   )
 endif()

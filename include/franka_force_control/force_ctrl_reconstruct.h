@@ -18,6 +18,7 @@
 #include <ros/node_handle.h>
 #include <ros/time.h>
 #include <Eigen/Core>
+#include <Eigen/Dense>
 #include <Eigen/Geometry>
 
 
@@ -25,8 +26,12 @@
 #include <franka_hw/franka_cartesian_command_interface.h>
 
 #include "std_msgs/Float32MultiArray.h"
+#include "std_msgs/Bool.h"
 #include "geometry_msgs/WrenchStamped.h"
 #include "geometry_msgs/Point.h"
+#include "trajectory_msgs/JointTrajectory.h"
+#include "visualization_msgs/Marker.h"
+
 
 #include <franka_control/ErrorRecoveryAction.h>
 #include <franka_control/ErrorRecoveryActionGoal.h>
@@ -57,7 +62,8 @@ class ForceCtrlReconstruct : public controller_interface::MultiInterfaceControll
           force_des_pub, force_pid_pub, force_nof_pub, force_ref_pub,
           force_cor_pub;
   ros::Publisher pos_ref_glob_pub, pos_glob_pub;
-  ros::Subscriber reset_sub_, force_torque_ref_, impedance_pos_ref_;
+  ros::Publisher marker_pos_, marker_pip_;
+  ros::Subscriber sub_pose_ref_, reset_sub_, force_torque_ref_, impedance_pos_ref_, gripper_type_sub_;
   std::unique_ptr<franka_hw::FrankaModelHandle> model_handle_;
   std::unique_ptr<franka_hw::FrankaStateHandle> state_handle_;
   std::vector<hardware_interface::JointHandle> joint_handles_;
@@ -137,6 +143,9 @@ class ForceCtrlReconstruct : public controller_interface::MultiInterfaceControll
   void ft_ref_callback(const geometry_msgs::WrenchStamped::ConstPtr& msg);
   void imp_pos_ref_callback(const geometry_msgs::Point::ConstPtr& msg);
 
+  void gripper_type_callback(const std_msgs::Bool::ConstPtr& msg);
+  bool gripper_rigid_{false};
+
   Eigen::Matrix<double, 6, 1> PID(Eigen::Matrix<double, 6, 1> measured, 
                                   Eigen::Matrix<double, 6, 1> desired,
                                   const ros::Duration& period);
@@ -160,18 +169,49 @@ class ForceCtrlReconstruct : public controller_interface::MultiInterfaceControll
   double count_time_{0.0};
   Eigen::Matrix<double, 3, 1> pos_global_prev_, vel_global_prev_;
   Eigen::Matrix<double, 4, 1> dXglobal_;
-  double imp_f_{0.1}, imp_m_{3.}, imp_d_{31.6228}, imp_k_{50.}, imp_scale_{5.0};
-  double target_imp_f_{0.}, target_imp_m_{0.}, target_imp_d_{10.}, target_imp_k_{2.5}, target_imp_scale_{4.0};
+  double imp_f_{0.1}, imp_m_{3.}, imp_d_{31.6228}, imp_k_{50.}, imp_scale_{5.0}, imp_scale_m_{0.0}, imp_scale_m_i_{0.0};
+  double target_imp_f_{0.}, target_imp_m_{0.}, target_imp_d_{10.}, target_imp_k_{2.5}, target_imp_scale_{4.0}, target_imp_scale_m_{0.0}, target_imp_scale_m_i_{0.0};
   
   Eigen::Matrix<double, 6, 1> impedanceOpenLoop(const ros::Duration& period, 
-                                                Eigen::Matrix<double, 6, 1> f_ext);
+                                                Eigen::Matrix<double, 6, 1> f_ext, 
+                                                Eigen::VectorXd incline,
+                                                Eigen::VectorXd pos_ref);
 
   Eigen::Matrix<double, 4, 1> posGlEE_prev_;
 
   int wiggle_timer_{0};
   Eigen::Matrix<double, 3, 1> wiggle_moments_;
-  Eigen::Matrix<double, 3, 1> wiggle(float velocity_amplitude);
   float vel_ampl_prev_{0.};
+  Eigen::Matrix<double, 3, 1> wiggle(float velocity_amplitude);
+
+  Eigen::VectorXd polyfit(Eigen::VectorXd xvals, Eigen::VectorXd yvals,int order);
+
+  int polyfit_history{0};
+  Eigen::MatrixXd history_pos_;
+  Eigen::VectorXd directionPrediction(Eigen::VectorXd position);
+  int flag_reset_{10};
+  Eigen::VectorXd incline_, target_incline_, pos_ref_, target_pos_ref_;
+  Eigen::VectorXd moments_integrate_;
+  Eigen::VectorXd cummulative_dist_, distances_;
+
+  int marker_id_{0};
+  int count_markers_{0};
+
+  int pipe_dir_freq_{20};
+
+
+  bool received_{false};
+  int counter{100};
+  int i_point_{0};
+
+  trajectory_msgs::JointTrajectory msg_;
+
+
+  Eigen::Vector3d pos_d_target_, ori_d_target_; 
+  std::array<double, 16> new_T_target_{};
+
+
+  void PathRefCallback(const trajectory_msgs::JointTrajectory& msg);
 };
 
 }  // namespace franka_force_control

@@ -1,14 +1,14 @@
 <?xml version="1.0" ?>
 <launch>
   <arg name="robot_ip" />
-  <arg name="load_gripper" default="false" />
+  <arg name="load_gripper" default="true" />
   <include file="$(find franka_control)/launch/franka_control.launch" >
     <arg name="robot_ip" value="$(arg robot_ip)" />
     <arg name="load_gripper" value="$(arg load_gripper)" />
   </include>
 
   <rosparam command="load" file="$(find franka_force_control)/config/franka_force_control.yaml" />
-  <rosparam command="load" file="$(find franka_force_control)/config/pojacanja.yaml" />
+  <rosparam command="load" file="$(find franka_force_control)/config/pojacanja_nova.yaml" />
   <node name="controller_spawner" pkg="controller_manager" type="spawner" respawn="false" output="screen"  args="force_example_controller"/>
   <!-- <node name="controller_spawner_model" pkg="controller_manager" type="spawner" respawn="false" output="screen"  args="model_example_controller"/> -->
 

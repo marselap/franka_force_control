@@ -625,7 +625,7 @@ Eigen::Matrix<double, 6, 1> ForceExampleController::impedanceOpenLoop(
   } 
   dxAmpl = sqrt(dxAmpl);
   if (dxAmpl >= 0.1) {
-    velRefLoc = 0.2 * velRefLoc / dxAmpl;
+    velRefLoc = 0.3 * velRefLoc / dxAmpl;
   }
 
   Eigen::Matrix<double, 3, 3> R_base;

@@ -1,3 +1,8 @@
+cartesian_pose_example_controller:
+    type: franka_force_control/CartesianPoseExampleController
+    arm_id: panda
+
+
 model_example_controller:
     type: franka_force_control/ModelExampleController
     arm_id: panda

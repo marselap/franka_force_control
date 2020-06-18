@@ -14,5 +14,12 @@
       A PI controller that applies a force corresponding to a user-provided desired mass in the z axis. The desired mass value can be modified online with dynamic reconfigure. 
     </description>
   </class>
+  
+  <class name="franka_force_control/CartesianPoseExampleController" type="franka_force_control::CartesianPoseExampleController" base_class_type="controller_interface::ControllerBase">
+    <description>
+      A controller that executes a short motion based on cartesian poses to demonstrate correct usage
+    </description>
+  </class> >
+
 
 </library>
