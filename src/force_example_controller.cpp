@@ -13,6 +13,9 @@
 
 #include <franka/errors.h>
 
+#include "pseudo_inversion.h"
+
+
 #define LO -1.0
 #define HI 1.0
 #define N_ORDER 3
@@ -99,6 +102,35 @@ bool ForceExampleController::init(hardware_interface::RobotHW* robot_hw,
     ft_pid_target(i+3,2) = md[i];
   }
 
+  std::vector<double> ori_x, ori_y, ori_z;
+  node_handle.getParam("/ori_x", ori_x);
+  node_handle.getParam("/ori_y", ori_y);
+  node_handle.getParam("/ori_z", ori_z);
+  
+  for (int i = 0; i < 3; i++ ){
+    pid_ori_x(0, i) = ori_x[i];
+    pid_ori_y(0, i) = ori_y[i];
+    pid_ori_z(0, i) = ori_z[i];
+  }
+
+  double limit = 10;
+  orientation_pid_roll.set_kp(pid_ori_x(0, 0));
+  orientation_pid_roll.set_ki(pid_ori_x(0, 1));
+  orientation_pid_roll.set_kd(pid_ori_x(0, 2));
+  orientation_pid_roll.set_lim_high(limit);
+  orientation_pid_roll.set_lim_low(-limit);
+
+  orientation_pid_pitch.set_kp(pid_ori_y(0, 0));
+  orientation_pid_pitch.set_ki(pid_ori_y(0, 1));
+  orientation_pid_pitch.set_kd(pid_ori_y(0, 2));
+  orientation_pid_pitch.set_lim_high(limit);
+  orientation_pid_pitch.set_lim_low(-limit);
+
+  orientation_pid_yaw.set_kp(pid_ori_z(0, 0));
+  orientation_pid_yaw.set_ki(pid_ori_z(0, 1));
+  orientation_pid_yaw.set_kd(pid_ori_z(0, 2));
+  orientation_pid_yaw.set_lim_high(limit);
+  orientation_pid_yaw.set_lim_low(-limit);
 
   if (ros::param::has("/imp_d_")) {
     ros::param::get("/imp_d_", imp_d_);
@@ -167,6 +199,14 @@ bool ForceExampleController::init(hardware_interface::RobotHW* robot_hw,
   marker_pos_ = node_handle.advertise<visualization_msgs::Marker>("/franka_pos", 1);
   marker_pip_ = node_handle.advertise<visualization_msgs::Marker>("/pipe_ori", 1);
 
+  ori_pid_roll_msg_pub_ = node_handle.advertise<franka_force_control::PIDController>("ori_pid_roll_msg", 1);
+  ori_pid_pitch_msg_pub_ = node_handle.advertise<franka_force_control::PIDController>("ori_pid_pitch_msg", 1);
+  ori_pid_yaw_msg_pub_ = node_handle.advertise<franka_force_control::PIDController>("ori_pid_yaw_msg", 1);
+
+
+  state_handle_pub_ = node_handle.advertise<geometry_msgs::Point>("/position_state_handle", 1);  
+  model_handle_pub_ = node_handle.advertise<geometry_msgs::Point>("/position_model_handle", 1);  
+
   return true;
 }
 
@@ -195,6 +235,20 @@ void ForceExampleController::ft_ref_callback(
   target_tz_ = msg->wrench.torque.z;
   
 }
+
+// void ForceExampleController::f_ori_ref_callback(
+//   const geometry_msgs::WrenchStamped::ConstPtr& msg){
+
+//   target_x_ = msg->wrench.force.x;
+//   target_y_ = msg->wrench.force.y;
+//   target_z_ = msg->wrench.force.z;
+
+//   target_ori_x_ = msg->wrench.torque.x;
+//   target_ori_y_ = msg->wrench.torque.y;
+//   target_ori_z_ = msg->wrench.torque.z;
+  
+// }
+
 
 void ForceExampleController::imp_pos_ref_callback(
   const geometry_msgs::Point::ConstPtr& msg) {
@@ -268,7 +322,8 @@ void ForceExampleController::starting(const ros::Time& /*time*/) {
   cummulative_dist_.setZero(MAX_HIST_LEN_);
   distances_.setZero(MAX_HIST_LEN_);
 
-  moments_integrate_.setZero(3);
+  moments_integrate_.setZero(3);  
+
 }
 
 void ForceExampleController::update(const ros::Time& /*time*/, const ros::Duration& period) {
@@ -321,7 +376,6 @@ void ForceExampleController::update(const ros::Time& /*time*/, const ros::Durati
   Eigen::Matrix<double, 6, 1> force_pid, force_imp;
   force_imp.setZero();
 
-
   Eigen::VectorXd position(3), incline(3);
   Eigen::VectorXd pos_loc(4), pos_glob(4);
   pos_loc[0] = 0;
@@ -331,7 +385,20 @@ void ForceExampleController::update(const ros::Time& /*time*/, const ros::Durati
   pos_glob = T_base * pos_loc;
   position = pos_glob.block(0,0,3,1);
 
-  // position << T_base_arr[12], T_base_arr[13], T_base_arr[14];
+  geometry_msgs::Point state_position_msg;
+  T_base_arr = robot_state.O_T_EE;
+  state_position_msg.x = T_base_arr[12];
+  state_position_msg.y = T_base_arr[13];
+  state_position_msg.z = T_base_arr[14];
+  state_handle_pub_.publish(state_position_msg);
+
+  geometry_msgs::Point model_position_msg;
+  std::array<double, 16> model_pose_arr = model_handle_->getPose(franka::Frame::kEndEffector);
+  // std::array<double, 16> model_pose_arr = model_handle_->getPose(franka::Frame::kFlange);
+  model_position_msg.x = model_pose_arr[12];
+  model_position_msg.y = model_pose_arr[13];
+  model_position_msg.z = model_pose_arr[14];
+  model_handle_pub_.publish(model_position_msg);
 
   if (mode_ == franka::RobotMode::kMove && period.toSec() > 0.) {
 
@@ -343,130 +410,58 @@ void ForceExampleController::update(const ros::Time& /*time*/, const ros::Durati
     else {
       pipe_dir_freq_ -= 1;
     }
-
-
     incline_ = 0.9 * incline_ + 0.1 * target_incline_;
 
-
     force_imp = ForceExampleController::impedanceOpenLoop(period, force_meas, incline_);
+    // std::cout << "force_x: " << force_imp[0] << std::endl;
+    // std::cout << "force_y: " << force_imp[1] << std::endl;
+    // std::cout << "force_z: " << force_imp[2] << std::endl << std::endl;
 
-    force_pid = ForceExampleController::PID(force_meas, force_des + force_imp, period);
-    // force_pid = ForceExampleController::PID(force_meas, force_des , period);
+    // force_pid = ForceExampleController::PID_ft(force_meas, force_des + force_imp, period);
 
-
-    if (count_markers_ == 100) {
-      marker_id_ += 1;
-      visualization_msgs::Marker marker_pos, marker_pip;
-      uint32_t shape = visualization_msgs::Marker::SPHERE;
-      marker_pos.header.frame_id = "/my_frame";
-      marker_pos.header.stamp = ros::Time::now();
-      marker_pos.ns = "position";
-      marker_pos.id = marker_id_;
-      marker_pos.type = shape;
-      marker_pos.action = visualization_msgs::Marker::ADD;
-      marker_pos.pose.position.x = position[0];
-      marker_pos.pose.position.y = position[1];
-      marker_pos.pose.position.z = position[2];
-      marker_pos.pose.orientation.x = 0.0;
-      marker_pos.pose.orientation.y = 0.0;
-      marker_pos.pose.orientation.z = 0.0;
-      marker_pos.pose.orientation.w = 1.0;
-      marker_pos.scale.x = 0.01;
-      marker_pos.scale.y = 0.01;
-      marker_pos.scale.z = 0.01;
-      marker_pos.color.r = 0.0f;
-      marker_pos.color.g = 1.0f;
-      marker_pos.color.b = 0.0f;
-      marker_pos.color.a = 1.0;
-      marker_pos.lifetime = ros::Duration();
-      marker_pos_.publish(marker_pos);
-
-      shape = visualization_msgs::Marker::ARROW;
-      marker_pip.header.frame_id = "/my_frame";
-      marker_pip.header.stamp = ros::Time::now();
-      marker_pip.ns = "orientation";
-      marker_pip.id = 0;
-      marker_pip.type = shape;
-      marker_pip.action = visualization_msgs::Marker::ADD;
-      // marker_pip.pose.position.x = position[0];
-      // marker_pip.pose.position.y = position[1];
-      // marker_pip.pose.position.z = position[2];
-      // marker_pip.pose.orientation.x = 0.0;
-      // marker_pip.pose.orientation.y = 0.0;
-      // marker_pip.pose.orientation.z = 0.0;
-      // marker_pip.pose.orientation.w = 1.0;
-      marker_pip.scale.x = 0.005;
-      marker_pip.scale.y = 0.001;
-      marker_pip.scale.z = 0.001;
-      marker_pip.color.r = 1.0f;
-      marker_pip.color.g = 0.0f;
-      marker_pip.color.b = 0.0f;
-      marker_pip.color.a = 1.0;
-      // std::cout << "aaaaaaaa11" << std::endl;
-
-      marker_pip.points.resize(2);
-      
-      marker_pip.points[0].x = position[0];
-      marker_pip.points[0].y = position[1];
-      marker_pip.points[0].z = position[2];
-
-      marker_pip.points[1].x = position[0] + incline_[0]/incline_.norm();
-      marker_pip.points[1].y = position[1] + incline_[1]/incline_.norm();
-      marker_pip.points[1].z = position[2] + incline_[2]/incline_.norm();
-      
-      // std::cout << "aaaaaaaa22" << std::endl;
-      marker_pip.lifetime = ros::Duration();
-      marker_pip_.publish(marker_pip);
-
-
-      count_markers_ = 0;
+    float orientation_meas[3];
+    Eigen::Matrix4d T_base_4d;
+    for (int i = 0; i < 4; i++){
+      for (int j = 0; j < 4; j++ ) {
+        T_base_4d(i,j) = T_base(i,j);
+      }
     }
-    else {
-      count_markers_++;
-    }
+    getAnglesFromRotationTranslationMatrix(T_base_4d, orientation_meas);
 
+    float dt = period.toSec();
 
+    wrapErrToPi(orientation_meas);
+
+    // std::cout << "roll_des: " << orientation_pid_roll.compute((float)target_tx_, orientation_meas[0], dt) << std::endl;
+    // std::cout << "pitch_des: " << orientation_pid_pitch.compute((float)target_ty_, orientation_meas[1], dt) << std::endl;
+    // std::cout << "pitch_des: " << orientation_pid_pitch.compute((float)target_ty_, orientation_meas[1], dt) << std::endl << std::endl;
+    // std::cout << "yaw_des: " << orientation_pid_yaw.compute((float)target_tz_, orientation_meas[2], dt) << std::endl << std::endl;
+
+    force_imp[0] = 0.0;
+    force_imp[1] = 0.0;
+    force_imp[2] = 0.0;
+
+    force_imp[3] = orientation_pid_roll.compute((float)target_tx_, orientation_meas[0], dt);
+    force_imp[4] = orientation_pid_pitch.compute((float)target_ty_, orientation_meas[1], dt);
+    // force_imp[4] = 0.0;
+    force_imp[5] = orientation_pid_yaw.compute((float)target_tz_, orientation_meas[2], dt);
+
+    force_pid = ForceExampleController::PID_ft(force_meas, force_imp, period);
+
+    franka_force_control::PIDController pid_msg;
+    orientation_pid_roll.create_msg(pid_msg);
+    ori_pid_roll_msg_pub_.publish(pid_msg);
+
+    orientation_pid_pitch.create_msg(pid_msg);
+    ori_pid_pitch_msg_pub_.publish(pid_msg);
+
+    orientation_pid_yaw.create_msg(pid_msg);
+    ori_pid_yaw_msg_pub_.publish(pid_msg);
+
+    rviz_markers_plot(position);
 
     // Update signals changed online through dynamic reconfigure
-    desired_x_ = filter_gain_ * target_x_ + (1 - filter_gain_) * desired_x_;
-    desired_y_ = filter_gain_ * target_y_ + (1 - filter_gain_) * desired_y_;
-    desired_z_ = filter_gain_ * target_z_ + (1 - filter_gain_) * desired_z_;
-    desired_tx_ = filter_gain_ * target_tx_ + (1 - filter_gain_) * desired_tx_;
-    desired_ty_ = filter_gain_ * target_ty_ + (1 - filter_gain_) * desired_ty_;
-    desired_tz_ = filter_gain_ * target_tz_ + (1 - filter_gain_) * desired_tz_;
-    
-    if (fabs(desired_x_) < 1e-4) {
-      desired_x_ = 0;
-    }
-    if (fabs(desired_y_) < 1e-4) {
-      desired_y_ = 0;
-    }
-    if (fabs(desired_z_) < 1e-4) {
-      desired_z_ = 0;
-    }
-
-    k_p_ = filter_gain_ * target_k_p_ + (1 - filter_gain_) * k_p_;
-    k_i_ = filter_gain_ * target_k_i_ + (1 - filter_gain_) * k_i_;
-
-    ft_pid = filter_gain_ * ft_pid_target + (1 - filter_gain_) * ft_pid;
-
-    imp_d_ = filter_gain_ * target_imp_d_ + (1 - filter_gain_) * imp_d_; 
-    imp_k_ = filter_gain_ * target_imp_k_ + (1 - filter_gain_) * imp_k_; 
-    imp_m_ = filter_gain_ * target_imp_m_ + (1 - filter_gain_) * imp_m_; 
-    imp_f_ = filter_gain_ * target_imp_f_ + (1 - filter_gain_) * imp_f_; 
-
-    imp_scale_ = filter_gain_ * target_imp_scale_ + (1 - filter_gain_) * imp_scale_; 
-
-    imp_d_ = target_imp_d_;
-    imp_k_ = target_imp_k_;
-    imp_m_ = target_imp_m_;
-    imp_f_ = target_imp_f_;
-
-    imp_scale_ = target_imp_scale_;
-
-    imp_scale_m_ = target_imp_scale_m_; 
-    imp_scale_m_i_ = target_imp_scale_m_i_; 
-    
+    filter_new_params();
 
   }
   else {
@@ -493,7 +488,24 @@ void ForceExampleController::update(const ros::Time& /*time*/, const ros::Durati
   jacobian_reduced.block<3,4>(0,0) = jacobian.block<3,4>(0,0);
   jacobian_reduced.block<3,3>(3,4) = jacobian.block<3,3>(3,4);
 
-  tau_pid << jacobian_reduced.transpose() * (force_pid);
+  // tau_pid << jacobian_reduced.transpose() * (force_pid);
+
+  Eigen::MatrixXd jacobian_pinv;
+  pseudoInverse(jacobian_reduced, jacobian_pinv);
+
+  tau_pid << jacobian_pinv * (force_pid);
+
+
+
+  // Eigen::Matrix<double, 7, 6> jacobian_pseudoinverse;
+  // // Eigen::Matrix<double, 7, 7> temp;
+  // // temp << jacobian_reduced * jacobian_reduced.transpose();
+  // // jacobian_pseudoinverse = temp * jacobian_reduced; 
+  // Eigen::CompleteOrthogonalDecomposition<Eigen::MatrixXd> cqr(jacobian_reduced);
+  // jacobian_pseudoinverse = cqr.pseudoInverse();
+  // // jacobian_pseudoinverse = jacobian_reduced.completeOrthogonalDecomposition().pseudoInverse();
+
+
   // tau_pid << jacobian.transpose() * (force_pid);
 
   tau_cmd_pid << saturateTorqueRate(tau_pid, tau_J_d);
@@ -502,11 +514,17 @@ void ForceExampleController::update(const ros::Time& /*time*/, const ros::Durati
     joint_handles_[i].setCommand(tau_cmd_pid(i));
   }
 
+
+
   tau_ext = tau_measured - gravity - tau_ext_initial_;
   tau_d << jacobian.transpose() * desired_force_torque;
-  tau_error_ = tau_error_ + period.toSec() * (tau_d - tau_ext);
-  tau_cmd = tau_d + k_p_ * (tau_d - tau_ext) + k_i_ * tau_error_;
-  tau_cmd << saturateTorqueRate(tau_cmd, tau_J_d);
+
+  debug_publish_tau(tau_ext, tau_d, tau_cmd_pid);
+  debug_publish_force(force_imp, force_meas, desired_force_torque, force_pid, force_cor);
+
+}
+
+void ForceExampleController::debug_publish_tau(Eigen::VectorXd tau_ext, Eigen::VectorXd tau_d, Eigen::VectorXd tau_cmd_pid){
 
   std_msgs::Float32MultiArray array_ext, array_d, array_cmd;
   for(int i = 0; i < 7; i++) {
@@ -518,6 +536,11 @@ void ForceExampleController::update(const ros::Time& /*time*/, const ros::Durati
   tau_d_pub.publish(array_d);
   tau_cmd_pub.publish(array_cmd);
 
+}
+
+void ForceExampleController::debug_publish_force(Eigen::Matrix<double, 6, 1> force_imp, Eigen::Matrix<double, 6, 1> force_meas, 
+  Eigen::VectorXd desired_force_torque, Eigen::Matrix<double, 6, 1> force_pid, Eigen::Matrix<double, 6, 1> force_cor){
+
   std_msgs::Float32MultiArray array_force, array_force_des, array_force_pid, array_no_filt, array_force_all;
   std_msgs::Float32MultiArray array_coriolis;  
 
@@ -527,10 +550,9 @@ void ForceExampleController::update(const ros::Time& /*time*/, const ros::Durati
     array_force_des.data.push_back(desired_force_torque[i]);
     array_force_pid.data.push_back(force_pid[i]);
     array_force_all.data.push_back(force_pid[i] + force_imp[i]);
-
     array_coriolis.data.push_back(force_cor[i]);
-
   }
+
   force_ext_pub.publish(array_force);
   force_des_pub.publish(array_force_des);
   force_pid_pub.publish(array_force_pid);
@@ -540,7 +562,7 @@ void ForceExampleController::update(const ros::Time& /*time*/, const ros::Durati
   force_cor_pub.publish(array_coriolis);
 }
 
-Eigen::Matrix<double, 6, 1> ForceExampleController::PID(
+Eigen::Matrix<double, 6, 1> ForceExampleController::PID_ft(
   Eigen::Matrix<double, 6, 1> measured, 
   Eigen::Matrix<double, 6, 1> desired,
   const ros::Duration& period){
@@ -575,6 +597,7 @@ Eigen::Matrix<double, 6, 1> ForceExampleController::PID(
   return pid_out;
 }
 
+
 Eigen::Matrix<double, 6, 1> ForceExampleController::antiWindup(Eigen::Matrix<double, 6, 1> u){
   for(int i = 0; i < 6; i++){
 
@@ -584,6 +607,33 @@ Eigen::Matrix<double, 6, 1> ForceExampleController::antiWindup(Eigen::Matrix<dou
       u[i] = - integrator_limit_;
   }
   return u;
+}
+
+void ForceExampleController::wrapErrToPi(float* orientation_meas){
+
+  double err = target_tx_ - orientation_meas[0];
+  if (err > 3.141592) {
+    target_tx_ = target_tx_ - 2 * 3.141592;
+  }
+  if (err < - 3.141592) {
+    target_tx_ = target_tx_ + 2 * 3.141592;      
+  }
+  
+  // err = target_ty_ - orientation_meas[1];
+  // if (err > 3.141592) {
+  //   target_ty_ = target_ty_ - 2 * 3.141592;
+  // }
+  // if (err < - 3.141592) {
+  //   target_ty_ = target_ty_ + 2 * 3.141592;      
+  // }
+
+  // err = target_tz_ - orientation_meas[2];
+  // if (err > 3.141592) {
+  //   target_tz_ = target_tz_ - 2 * 3.141592;
+  // }
+  // if (err < - 3.141592) {
+  //   target_tz_ = target_tz_ + 2 * 3.141592;      
+  // }
 }
 
 
@@ -642,6 +692,17 @@ Eigen::Matrix<double, 6, 1> ForceExampleController::impedanceOpenLoop(
   accGlobal = (velGlobal - vel_global_prev_) / period.toSec();
 
 
+  // force = imp_scale_ * (- imp_f_ * f_ext.block<3,1>(0,0)
+  //         + imp_m_ * (accRefGlob - accGlobal)  
+  //         + imp_d_ * (velRefGlob - velGlobal) 
+  //         + imp_k_ * dXglobal.block(0,0,3,1));
+
+  force = (imp_m_ / imp_scale_ - 1.0) * f_ext.block<3,1>(0,0) 
+          - (imp_m_ / imp_scale_) * (imp_d_ * (velGlobal - velRefGlob)
+          - imp_k_ * dXglobal.block(0,0,3,1));
+
+
+  /*
   float velAmpl{0.}, impRefAmpl{0.};
   for (int i = 0; i < 3; i++) {
     velAmpl += pow(velGlobal[i], 2.);
@@ -657,17 +718,6 @@ Eigen::Matrix<double, 6, 1> ForceExampleController::impedanceOpenLoop(
     momentsLoc = wiggle(velAmpl);
     moments_wiggle = R_base * momentsLoc;
   }
-
-  // force = imp_scale_ * (- imp_f_ * f_ext.block<3,1>(0,0)
-  //         + imp_m_ * (accRefGlob - accGlobal)  
-  //         + imp_d_ * (velRefGlob - velGlobal) 
-  //         + imp_k_ * dXglobal.block(0,0,3,1));
-
-  force = (imp_m_ / imp_scale_ - 1.0) * f_ext.block<3,1>(0,0) 
-              // - imp_m_ * accRefGlob
-              - (imp_m_ / imp_scale_) * (imp_d_ * (velGlobal - velRefGlob)
-                - imp_k_ * dXglobal.block(0,0,3,1));
-
 
   Eigen::VectorXd refDirLoc(3), refDirGlob(3);
 
@@ -695,22 +745,26 @@ Eigen::Matrix<double, 6, 1> ForceExampleController::impedanceOpenLoop(
     moments.setZero();
   }
 
+  */
+
   force_torque.setZero();
 
   for(int i = 0; i < 3; i++) {
     force_torque[i] = force[i];
-    if (gripper_rigid_ == false) {
-      force_torque[i+3] = moments[i] + 0.5 * moments_wiggle[i];
-    }
-    else
-      force_torque[i+3] = moments[i] + moments_wiggle[i];
+    // do not update moment references, only force
+
+    // if (gripper_rigid_ == false) {
+    //   force_torque[i+3] = moments[i] + 0.5 * moments_wiggle[i];
+    // }
+    // else
+    //   force_torque[i+3] = moments[i] + moments_wiggle[i];
   }
 
   pos_global_prev_ = posGlobal;
   vel_global_prev_ = velGlobal;
 
 
-
+  /*
   std_msgs::Float32MultiArray array_dxglob, array_posglob;
   for(int i = 0; i < 3; i++) {
     array_dxglob.data.push_back(incline[i] - refDirGlob[i]);
@@ -721,12 +775,10 @@ Eigen::Matrix<double, 6, 1> ForceExampleController::impedanceOpenLoop(
     // array_posglob.data.push_back(posGlobal[i]);
   }
 
-
   array_dxglob.data.push_back(velAmpl);
   pos_ref_glob_pub.publish(array_dxglob);
   pos_glob_pub.publish(array_posglob);
-
-
+  */
 
   return force_torque;
 
@@ -776,16 +828,6 @@ Eigen::Matrix<double, 3, 1> ForceExampleController::wiggle(float velocity_amplit
     rand_vec_ampl = sqrt(rand_vec_ampl);
     rand_vec /= rand_vec_ampl;
 
-    // // rand_vec *= 0.1;
-    // // rand_vec -= wiggle_moments_;
-    // rand_vec_ampl = 0.;
-    // for(int i = 0; i < 3; i++){
-    //   rand_vec[i] = LO + static_cast <float> (rand()) /( static_cast <float> (RAND_MAX/(HI-LO)));
-    //   rand_vec_ampl += pow(rand_vec[i], 2.);
-    // }
-    // rand_vec_ampl = sqrt(rand_vec_ampl);
-    // rand_vec /= rand_vec_ampl;
-
     float wiggle_amplitude = 0.;
     float scale = 1.5;
 
@@ -827,6 +869,16 @@ void ForceExampleController::desiredMassParamCallback(
     config.scale_m = imp_scale_m_;
     config.scale_m_i = imp_scale_m_i_;
 
+    config.o_p_x = pid_ori_x(0, 0);
+    config.o_i_x = pid_ori_x(0, 1);
+    config.o_d_x = pid_ori_x(0, 2);
+    config.o_p_y = pid_ori_y(0, 0);
+    config.o_i_y = pid_ori_y(0, 1);
+    config.o_d_y = pid_ori_y(0, 2);
+    config.o_p_z = pid_ori_z(0, 0);
+    config.o_i_z = pid_ori_z(0, 1);
+    config.o_d_z = pid_ori_z(0, 2);
+
     config.f_p_x = ft_pid_target(0,0);
     config.f_i_x = ft_pid_target(0,1);
     config.f_d_x = ft_pid_target(0,2);
@@ -864,6 +916,16 @@ void ForceExampleController::desiredMassParamCallback(
     target_k_p_ = config.k_p;
     target_k_i_ = config.k_i;
 
+    pid_ori_x(0, 0) = config.o_p_x;
+    pid_ori_x(0, 1) = config.o_i_x;
+    pid_ori_x(0, 2) = config.o_d_x;
+    pid_ori_y(0, 0) = config.o_p_y;
+    pid_ori_y(0, 1) = config.o_i_y;
+    pid_ori_y(0, 2) = config.o_d_y;
+    pid_ori_z(0, 0) = config.o_p_z;
+    pid_ori_z(0, 1) = config.o_i_z;
+    pid_ori_z(0, 2) = config.o_d_z;
+
     ft_pid_target(0,0) = config.f_p_x;
     ft_pid_target(0,1) = config.f_i_x;
     ft_pid_target(0,2) = config.f_d_x;
@@ -885,6 +947,19 @@ void ForceExampleController::desiredMassParamCallback(
     ft_pid_target(5,2) = config.t_d_z;
 
     integrator_limit_ = config.limit;
+
+    orientation_pid_roll.set_kp(pid_ori_x(0, 0));
+    orientation_pid_roll.set_ki(pid_ori_x(0, 1));
+    orientation_pid_roll.set_kd(pid_ori_x(0, 2));
+
+    orientation_pid_pitch.set_kp(pid_ori_y(0, 0));
+    orientation_pid_pitch.set_ki(pid_ori_y(0, 1));
+    orientation_pid_pitch.set_kd(pid_ori_y(0, 2));
+
+    orientation_pid_yaw.set_kp(pid_ori_z(0, 0));
+    orientation_pid_yaw.set_ki(pid_ori_z(0, 1));
+    orientation_pid_yaw.set_kd(pid_ori_z(0, 2));
+
   }
 }
 
@@ -933,33 +1008,8 @@ Eigen::VectorXd ForceExampleController::directionPrediction(Eigen::VectorXd posi
     }
   }
 
-  // float dist = 0.;
-  // float dist_1 = 0.;
-
-  // Eigen::VectorXd cum_dist = Eigen::VectorXd::Zero(n);
-
-  // int i_points = 0;
-  // Eigen::VectorXd resultant;
-  // while ((fabs(dist) < MIN_DIST_) && (i_points < polyfit_history-1)) {
-  //   dist_1 = 0.;
-  //   resultant = history_pos_.col(n-i_points) - history_pos_.col(n-(i_points+1));
-  //   dist_1 = resultant.norm();
-  //   // for (int i = 0; i < 3; i++) {
-
-  //   //   dist_1 += pow(history_pos_(i, n-i_points) - history_pos_(i, n-(i_points+1)), 2);
-  //   // }
-  //   cum_dist(i_points) = cum_dist(i_points-1) + sqrt(dist_1);
-  //   dist += (cum_dist(i_points-1) - cum_dist(i_points));
-  //   i_points++;
-  // }
-
-  // polyfit_history = i_points + 1;
-
   bool standing_still = false;
 
-  // if (cummulative_dist_.sum() < MIN_DIST_) {
-  //   standing_still = true;
-  // }
 
   Eigen::VectorXd incline;
   incline.setZero(3,1);
@@ -1029,24 +1079,146 @@ Eigen::VectorXd ForceExampleController::polyfit(Eigen::VectorXd t, Eigen::Vector
   return coeffs.reverse();
 }
 
-//   assert(xvals.size() == yvals.size());
-//   assert(order >= 1 && order <= xvals.size() - 1);
-//   Eigen::MatrixXd A(xvals.size(), order + 1);
 
-//   for (int i = 0; i < xvals.size(); i++) {
-//     A(i, 0) = 1.0;
-//   }
 
-//   for (int j = 0; j < xvals.size(); j++) {
-//     for (int i = 0; i < order; i++) {
-//       A(j, i + 1) = A(j, i) * xvals(j);
-//     }
-//   }
+void ForceExampleController::getAnglesFromRotationTranslationMatrix(Eigen::Matrix4d &rotationTranslationMatrix,
+ float *angles)
+{
+  double r11, r21, r31, r32, r33;
+  double roll, pitch, yaw;
 
-//   auto Q = A.householderQr();
-//   auto result = Q.solve(yvals);
-//   return result;
-// }
+  r11 = rotationTranslationMatrix(0,0);
+  r21 = rotationTranslationMatrix(1,0);
+  r31 = rotationTranslationMatrix(2,0);
+  r32 = rotationTranslationMatrix(2,1);
+  r33 = rotationTranslationMatrix(2,2);
+
+  roll = atan2(r32, r33);
+  pitch = atan2(-r31, sqrt(r32*r32 + r33*r33));
+  yaw = atan2(r21, r11);
+
+  angles[0] = roll;
+  angles[1] = pitch;
+  angles[2] = yaw;
+}
+
+void ForceExampleController::rviz_markers_plot(Eigen::VectorXd position){
+  if (count_markers_ == 100) {
+    marker_id_ += 1;
+    visualization_msgs::Marker marker_pos, marker_pip;
+    uint32_t shape = visualization_msgs::Marker::SPHERE;
+    marker_pos.header.frame_id = "/my_frame";
+    marker_pos.header.stamp = ros::Time::now();
+    marker_pos.ns = "position";
+    marker_pos.id = marker_id_;
+    marker_pos.type = shape;
+    marker_pos.action = visualization_msgs::Marker::ADD;
+    marker_pos.pose.position.x = position[0];
+    marker_pos.pose.position.y = position[1];
+    marker_pos.pose.position.z = position[2];
+    marker_pos.pose.orientation.x = 0.0;
+    marker_pos.pose.orientation.y = 0.0;
+    marker_pos.pose.orientation.z = 0.0;
+    marker_pos.pose.orientation.w = 1.0;
+    marker_pos.scale.x = 0.01;
+    marker_pos.scale.y = 0.01;
+    marker_pos.scale.z = 0.01;
+    marker_pos.color.r = 0.0f;
+    marker_pos.color.g = 1.0f;
+    marker_pos.color.b = 0.0f;
+    marker_pos.color.a = 1.0;
+    marker_pos.lifetime = ros::Duration();
+    marker_pos_.publish(marker_pos);
+
+    shape = visualization_msgs::Marker::ARROW;
+    marker_pip.header.frame_id = "/my_frame";
+    marker_pip.header.stamp = ros::Time::now();
+    marker_pip.ns = "orientation";
+    marker_pip.id = 0;
+    marker_pip.type = shape;
+    marker_pip.action = visualization_msgs::Marker::ADD;
+    // marker_pip.pose.position.x = position[0];
+    // marker_pip.pose.position.y = position[1];
+    // marker_pip.pose.position.z = position[2];
+    // marker_pip.pose.orientation.x = 0.0;
+    // marker_pip.pose.orientation.y = 0.0;
+    // marker_pip.pose.orientation.z = 0.0;
+    // marker_pip.pose.orientation.w = 1.0;
+    marker_pip.scale.x = 0.005;
+    marker_pip.scale.y = 0.001;
+    marker_pip.scale.z = 0.001;
+    marker_pip.color.r = 1.0f;
+    marker_pip.color.g = 0.0f;
+    marker_pip.color.b = 0.0f;
+    marker_pip.color.a = 1.0;
+    // std::cout << "aaaaaaaa11" << std::endl;
+
+    marker_pip.points.resize(2);
+    
+    marker_pip.points[0].x = position[0];
+    marker_pip.points[0].y = position[1];
+    marker_pip.points[0].z = position[2];
+
+    marker_pip.points[1].x = position[0] + incline_[0]/incline_.norm();
+    marker_pip.points[1].y = position[1] + incline_[1]/incline_.norm();
+    marker_pip.points[1].z = position[2] + incline_[2]/incline_.norm();
+
+    marker_pip.lifetime = ros::Duration();
+    marker_pip_.publish(marker_pip);
+
+
+    count_markers_ = 0;
+  }
+  else {
+    count_markers_++;
+  }
+}
+
+void ForceExampleController::filter_new_params(){
+    desired_x_ = filter_gain_ * target_x_ + (1 - filter_gain_) * desired_x_;
+    desired_y_ = filter_gain_ * target_y_ + (1 - filter_gain_) * desired_y_;
+    desired_z_ = filter_gain_ * target_z_ + (1 - filter_gain_) * desired_z_;
+    desired_tx_ = filter_gain_ * target_tx_ + (1 - filter_gain_) * desired_tx_;
+    desired_ty_ = filter_gain_ * target_ty_ + (1 - filter_gain_) * desired_ty_;
+    desired_tz_ = filter_gain_ * target_tz_ + (1 - filter_gain_) * desired_tz_;
+    
+    if (fabs(desired_x_) < 1e-4) {
+      desired_x_ = 0;
+    }
+    if (fabs(desired_y_) < 1e-4) {
+      desired_y_ = 0;
+    }
+    if (fabs(desired_z_) < 1e-4) {
+      desired_z_ = 0;
+    }
+
+    k_p_ = filter_gain_ * target_k_p_ + (1 - filter_gain_) * k_p_;
+    k_i_ = filter_gain_ * target_k_i_ + (1 - filter_gain_) * k_i_;
+
+    ft_pid = filter_gain_ * ft_pid_target + (1 - filter_gain_) * ft_pid;
+
+    // pid_ori_x = filter_gain_ * pid_ori_x_target + (1 - filter_gain_) * pid_ori_x;
+    // pid_ori_y = filter_gain_ * pid_ori_y_target + (1 - filter_gain_) * pid_ori_y;
+    // pid_ori_z = filter_gain_ * pid_ori_z_target + (1 - filter_gain_) * pid_ori_z;
+
+    imp_d_ = filter_gain_ * target_imp_d_ + (1 - filter_gain_) * imp_d_; 
+    imp_k_ = filter_gain_ * target_imp_k_ + (1 - filter_gain_) * imp_k_; 
+    imp_m_ = filter_gain_ * target_imp_m_ + (1 - filter_gain_) * imp_m_; 
+    imp_f_ = filter_gain_ * target_imp_f_ + (1 - filter_gain_) * imp_f_; 
+
+    imp_scale_ = filter_gain_ * target_imp_scale_ + (1 - filter_gain_) * imp_scale_; 
+
+    imp_d_ = target_imp_d_;
+    imp_k_ = target_imp_k_;
+    imp_m_ = target_imp_m_;
+    imp_f_ = target_imp_f_;
+
+    imp_scale_ = target_imp_scale_;
+
+    imp_scale_m_ = target_imp_scale_m_; 
+    imp_scale_m_i_ = target_imp_scale_m_i_;     
+}
+
 
 }  // namespace franka_force_control
 

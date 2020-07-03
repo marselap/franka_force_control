@@ -18,6 +18,7 @@ find_package(catkin REQUIRED COMPONENTS
   roscpp
   rospy
   franka_control
+  std_msgs
 )
 
 find_package(Eigen3 REQUIRED)
@@ -25,9 +26,10 @@ find_package(Franka 0.5.0 REQUIRED)
 
 add_message_files(FILES
   JointTorqueComparison.msg
+  PIDController.msg
 )
 
-generate_messages()
+generate_messages(DEPENDENCIES std_msgs)
 
 generate_dynamic_reconfigure_options(
   cfg/compliance_param.cfg
@@ -48,6 +50,7 @@ catkin_package(
     roscpp
     franka_control
     visualization_msgs
+    std_msgs
   DEPENDS Franka
 )
 
@@ -60,6 +63,8 @@ add_library(franka_force_control
   src/median_filter.cpp
   src/Tf2.cpp
   src/Tf1.cpp
+
+  src/pid.cpp
 )
 
 add_dependencies(franka_force_control

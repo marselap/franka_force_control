@@ -20,7 +20,7 @@
 #include <Eigen/Core>
 #include <Eigen/Dense>
 #include <Eigen/Geometry>
-
+#include <Eigen/QR>    
 
 #include <franka_force_control/desired_mass_paramConfig.h>
 #include <franka_hw/franka_cartesian_command_interface.h>
@@ -36,6 +36,9 @@
 #include <franka_control/ErrorRecoveryActionGoal.h>
 
 #include <franka_force_control/median_filter.h>
+#include <franka_force_control/pid.h>
+
+
 
 #define MAX_FILTER_SAMPLES_NUM 100
 
@@ -67,6 +70,9 @@ class ForceExampleController : public controller_interface::MultiInterfaceContro
   std::unique_ptr<franka_hw::FrankaStateHandle> state_handle_;
   std::vector<hardware_interface::JointHandle> joint_handles_;
 
+  ros::Publisher ori_pid_roll_msg_pub_, ori_pid_pitch_msg_pub_, ori_pid_yaw_msg_pub_;
+
+  ros::Publisher state_handle_pub_, model_handle_pub_;
 
   std::unique_ptr<franka_hw::FrankaCartesianPoseHandle> cartesian_pose_handle_;
 
@@ -84,7 +90,7 @@ class ForceExampleController : public controller_interface::MultiInterfaceContro
   double target_x_{0.0};
   double target_y_{0.0};
   double target_z_{0.0};
-  double target_tx_{0.0};
+  double target_tx_{3.14};
   double target_ty_{0.0};
   double target_tz_{0.0};
   
@@ -98,6 +104,10 @@ class ForceExampleController : public controller_interface::MultiInterfaceContro
 
   Eigen::Matrix<double, 6, 3> ft_pid;  
   Eigen::Matrix<double, 6, 3> ft_pid_target;  
+
+  Eigen::Matrix<double, 1, 3> pid_ori_x_target, pid_ori_x;
+  Eigen::Matrix<double, 1, 3> pid_ori_y_target, pid_ori_y;
+  Eigen::Matrix<double, 1, 3> pid_ori_z_target, pid_ori_z;
 
   double f_p_x_{1.0};
   double f_i_x_{0.2};
@@ -143,9 +153,22 @@ class ForceExampleController : public controller_interface::MultiInterfaceContro
   void imp_pos_ref_callback(const geometry_msgs::Point::ConstPtr& msg);
 
   void gripper_type_callback(const std_msgs::Bool::ConstPtr& msg);
+
+
+  void getAnglesFromRotationTranslationMatrix(Eigen::Matrix4d &rotationTranslationMatrix, float *angles);
+
+  void rviz_markers_plot(Eigen::VectorXd position);
+  void filter_new_params();
+  void wrapErrToPi(float* orientation_meas);
+
+  void debug_publish_force(Eigen::Matrix<double, 6, 1> force_imp, Eigen::Matrix<double, 6, 1> force_meas, 
+    Eigen::VectorXd desired_force_torque, Eigen::Matrix<double, 6, 1> force_pid, Eigen::Matrix<double, 6, 1> force_cor);
+  void debug_publish_tau(Eigen::VectorXd tau_ext, Eigen::VectorXd tau_d, Eigen::VectorXd tau_cmd_pid);
+
+
   bool gripper_rigid_{false};
 
-  Eigen::Matrix<double, 6, 1> PID(Eigen::Matrix<double, 6, 1> measured, 
+  Eigen::Matrix<double, 6, 1> PID_ft(Eigen::Matrix<double, 6, 1> measured, 
                                   Eigen::Matrix<double, 6, 1> desired,
                                   const ros::Duration& period);
 
@@ -196,6 +219,9 @@ class ForceExampleController : public controller_interface::MultiInterfaceContro
   int count_markers_{0};
 
   int pipe_dir_freq_{20};
+
+  PID orientation_pid_roll, orientation_pid_pitch, orientation_pid_yaw;
+
 };
 
 }  // namespace franka_force_control
