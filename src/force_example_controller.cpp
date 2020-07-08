@@ -132,6 +132,14 @@ bool ForceExampleController::init(hardware_interface::RobotHW* robot_hw,
   orientation_pid_yaw.set_lim_high(limit);
   orientation_pid_yaw.set_lim_low(-limit);
 
+  for (int i = 0; i < 6; i++ ){
+    wrench_pid[i].set_kp(ft_pid_target(i,0));
+    wrench_pid[i].set_ki(ft_pid_target(i,1));
+    wrench_pid[i].set_kd(ft_pid_target(i,2));
+    wrench_pid[i].set_lim_high(integrator_limit_);
+    wrench_pid[i].set_lim_low(-integrator_limit_);
+  }
+
   if (ros::param::has("/imp_d_")) {
     ros::param::get("/imp_d_", imp_d_);
     target_imp_d_ = imp_d_;
@@ -203,6 +211,12 @@ bool ForceExampleController::init(hardware_interface::RobotHW* robot_hw,
   ori_pid_pitch_msg_pub_ = node_handle.advertise<franka_force_control::PIDController>("ori_pid_pitch_msg", 1);
   ori_pid_yaw_msg_pub_ = node_handle.advertise<franka_force_control::PIDController>("ori_pid_yaw_msg", 1);
 
+  const char *wrench_pid_topics[6] = { "/wrench_pid_fx", "/wrench_pid_fy", "/wrench_pid_fz", 
+                         "/wrench_pid_tx", "/wrench_pid_ty", "/wrench_pid_tz" }; 
+  
+  for (int i = 0; i < 6; i++ ){
+      wrench_pid_pub_[i] = node_handle.advertise<franka_force_control::PIDController>(wrench_pid_topics[i], 1);
+  }
 
   state_handle_pub_ = node_handle.advertise<geometry_msgs::Point>("/position_state_handle", 1);  
   model_handle_pub_ = node_handle.advertise<geometry_msgs::Point>("/position_model_handle", 1);  
@@ -443,10 +457,14 @@ void ForceExampleController::update(const ros::Time& /*time*/, const ros::Durati
 
     force_imp[3] = orientation_pid_roll.compute((float)target_tx_, orientation_meas[0], dt);
     force_imp[4] = orientation_pid_pitch.compute((float)target_ty_, orientation_meas[1], dt);
-    // force_imp[4] = 0.0;
     force_imp[5] = orientation_pid_yaw.compute((float)target_tz_, orientation_meas[2], dt);
 
-    force_pid = ForceExampleController::PID_ft(force_meas, force_imp, period);
+    for (int i = 0; i < 6; i++ ){
+      force_pid[i] = wrench_pid[i].compute(force_imp[i], force_meas[i], dt);
+    }
+
+
+    // force_pid = ForceExampleController::PID_ft(force_meas, force_imp, period);
 
     franka_force_control::PIDController pid_msg;
     orientation_pid_roll.create_msg(pid_msg);
@@ -457,6 +475,11 @@ void ForceExampleController::update(const ros::Time& /*time*/, const ros::Durati
 
     orientation_pid_yaw.create_msg(pid_msg);
     ori_pid_yaw_msg_pub_.publish(pid_msg);
+
+    for (int i = 0; i < 6; i++ ){
+      wrench_pid[i].create_msg(pid_msg);
+      wrench_pid_pub_[i].publish(pid_msg);
+    }
 
     rviz_markers_plot(position);
 
@@ -959,6 +982,13 @@ void ForceExampleController::desiredMassParamCallback(
     orientation_pid_yaw.set_kp(pid_ori_z(0, 0));
     orientation_pid_yaw.set_ki(pid_ori_z(0, 1));
     orientation_pid_yaw.set_kd(pid_ori_z(0, 2));
+
+    for (int i = 0; i < 6; i++ ){
+      wrench_pid[i].set_kp(ft_pid_target(i,0));
+      wrench_pid[i].set_ki(ft_pid_target(i,1));
+      wrench_pid[i].set_kd(ft_pid_target(i,2));
+    }
+
 
   }
 }

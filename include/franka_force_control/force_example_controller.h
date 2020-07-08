@@ -71,6 +71,7 @@ class ForceExampleController : public controller_interface::MultiInterfaceContro
   std::vector<hardware_interface::JointHandle> joint_handles_;
 
   ros::Publisher ori_pid_roll_msg_pub_, ori_pid_pitch_msg_pub_, ori_pid_yaw_msg_pub_;
+  ros::Publisher wrench_pid_pub_[6];
 
   ros::Publisher state_handle_pub_, model_handle_pub_;
 
@@ -221,7 +222,7 @@ class ForceExampleController : public controller_interface::MultiInterfaceContro
   int pipe_dir_freq_{20};
 
   PID orientation_pid_roll, orientation_pid_pitch, orientation_pid_yaw;
-
+  PID wrench_pid[6];
 };
 
 }  // namespace franka_force_control
