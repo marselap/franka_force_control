@@ -57,6 +57,7 @@ catkin_package(
 add_library(franka_force_control
   src/model_example_controller.cpp
   src/force_example_controller.cpp
+  src/tune_force_pid.cpp
   src/force_ctrl_reconstruct.cpp
   src/cartesian_pose_example_controller.cpp
 
