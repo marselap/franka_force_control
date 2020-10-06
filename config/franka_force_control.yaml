@@ -19,8 +19,8 @@ force_example_controller:
         - panda_joint6
         - panda_joint7
 
-tune_force_pid:
-    type: franka_force_control/TuneForcePid
+tune_force_pid_controller:
+    type: franka_force_control/TuneForcePidController
     arm_id: panda
     joint_names:
         - panda_joint1
@@ -43,3 +43,14 @@ force_ctrl_reconstruct:
         - panda_joint6
         - panda_joint7
 
+impedant_explorer:
+    type: franka_force_control/ImpedantExplorer
+    arm_id: panda
+    joint_names:
+        - panda_joint1
+        - panda_joint2
+        - panda_joint3
+        - panda_joint4
+        - panda_joint5
+        - panda_joint6
+        - panda_joint7

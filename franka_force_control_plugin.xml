@@ -9,9 +9,14 @@
       A PI controller that applies a force corresponding to a user-provided desired mass in the z axis. The desired mass value can be modified online with dynamic reconfigure. 
     </description>
   </class>
-  <class name="franka_force_control/TuneForcePid" type="franka_force_control::TuneForcePid" base_class_type="controller_interface::ControllerBase">
+  <class name="franka_force_control/TuneForcePidController" type="franka_force_control::TuneForcePidController" base_class_type="controller_interface::ControllerBase">
     <description>
       A PI controller that applies a force corresponding to a user-provided desired mass in the z axis. The desired mass value can be modified online with dynamic reconfigure. 
+    </description>
+  </class>
+  <class name="franka_force_control/ImpedantExplorer" type="franka_force_control::ImpedantExplorer" base_class_type="controller_interface::ControllerBase">
+    <description>
+      New version of old impedant explorer. 
     </description>
   </class>
   <class name="franka_force_control/ForceCtrlReconstruct" type="franka_force_control::ForceCtrlReconstruct" base_class_type="controller_interface::ControllerBase">

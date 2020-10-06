@@ -5,20 +5,18 @@ class sequence
     int period_;
     int start_;
     int end_;
-    std::array<std::pair<int,int>, 5> pulses;
+    std::array<std::pair<int,int>, 1> pulses;
 
 public:
+    sequence() :
+        sequence(0,1,1,0) {}
     sequence(int start, int duration, int interval, int repeat) 
-        : period_(2*interval+3*duration),
-          start_(start),
-          end_(start+repeat*period_),
+        : period_(interval * 1000),
+          start_(start * 1000),
+          end_(start_ + repeat*period_),
           pulses
           {{
-              {0                    , duration             }, // pulse 1
-              {interval             , interval  +  duration}, // pulse 2
-              {2*interval           , 2*interval+  duration}, // pulse 3
-              {2*interval+  duration, 2*interval+2*duration}, // pulse 4
-              {2*interval+2*duration, period_              }  // pulse 5
+              {0, duration * 1000}, // pulse 1
           }}
     {
         if(duration <= 0){
@@ -55,4 +53,16 @@ public:
     std::size_t getPulseNum() const{
         return pulses.size();
     }
+
+    void setParams(int start, int duration, int interval, int repeat) {
+          period_ = interval * 1000;
+          start_ = start * 1000;
+          end_ = start_ + repeat*period_;
+          std::array<std::pair<int,int>, 1> temp
+          {{
+              {0., duration*1000}, // pulse 1
+          }};
+          pulses = temp;
+    }
+
 };

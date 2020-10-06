@@ -32,19 +32,19 @@
 #include "visualization_msgs/Marker.h"
 
 
-#include <franka_control/ErrorRecoveryAction.h>
-#include <franka_control/ErrorRecoveryActionGoal.h>
+#include <franka_msgs/ErrorRecoveryAction.h>
+#include <franka_msgs/ErrorRecoveryActionGoal.h>
 
 #include <franka_force_control/median_filter.h>
 #include <franka_force_control/pid.h>
 
-
+#include "pulse.h"
 
 #define MAX_FILTER_SAMPLES_NUM 100
 
 namespace franka_force_control {
 
-class TuneForcePid : public controller_interface::MultiInterfaceController<
+class TuneForcePidController : public controller_interface::MultiInterfaceController<
                                    franka_hw::FrankaModelInterface,
                                    hardware_interface::EffortJointInterface,
                                    franka_hw::FrankaStateInterface,
@@ -61,7 +61,7 @@ class TuneForcePid : public controller_interface::MultiInterfaceController<
       const Eigen::Matrix<double, 7, 1>& tau_J_d);  // NOLINT (readability-identifier-naming)
 
   ros::Publisher tau_ext_pub, tau_d_pub, tau_cmd_pub, force_ext_pub, 
-          force_des_pub, force_pid_pub, force_nof_pub, force_ref_pub,
+          force_g_pub, force_c_pub, force_nof_pub, force_ref_pub,
           force_cor_pub;
   ros::Publisher pos_ref_glob_pub, pos_glob_pub;
   ros::Publisher marker_pos_, marker_pip_;
@@ -149,7 +149,7 @@ class TuneForcePid : public controller_interface::MultiInterfaceController<
   void desiredMassParamCallback(franka_force_control::desired_mass_paramConfig& config,
                                 uint32_t level);
 
-  void reset_callback(const franka_control::ErrorRecoveryActionGoal&  msg);
+  void reset_callback(const franka_msgs::ErrorRecoveryActionGoal&  msg);
   void ft_ref_callback(const geometry_msgs::WrenchStamped::ConstPtr& msg);
 
 
@@ -190,6 +190,33 @@ class TuneForcePid : public controller_interface::MultiInterfaceController<
 
   PID orientation_pid_roll, orientation_pid_pitch, orientation_pid_yaw;
   PID wrench_pid[6];
+
+  ros::Duration elapsed_time_{0};
+  sequence seq;
+
+
+  bool prev_active_ = true;
+  float dir_ref_ = 1;
+  float ref = 0;
+  // float ref_max = 0.1;
+  // float dref = 0.01;
+  float ref_max = 0.0;
+  float dref = 0.00;
+
+  int ctrld = 0;
+
+
+
+
+  void ramp_ref();
+
+  int ramp_phase{0}, ramp_cnt{0};
+  int joint_torque_ctrl_id;
+  std::vector<int> step_count;
+  std::vector<float> ramp_slopes;
+  std::vector<float> steps;
+  float joint_torque_ref_{0.0};
+  bool ramp_first_pass{true};
 };
 
 }  // namespace franka_force_control

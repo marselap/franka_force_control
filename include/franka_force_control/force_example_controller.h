@@ -32,8 +32,8 @@
 #include "visualization_msgs/Marker.h"
 
 
-#include <franka_control/ErrorRecoveryAction.h>
-#include <franka_control/ErrorRecoveryActionGoal.h>
+#include <franka_msgs/ErrorRecoveryAction.h>
+#include <franka_msgs/ErrorRecoveryActionGoal.h>
 
 #include <franka_force_control/median_filter.h>
 #include <franka_force_control/pid.h>
@@ -149,7 +149,7 @@ class ForceExampleController : public controller_interface::MultiInterfaceContro
   void desiredMassParamCallback(franka_force_control::desired_mass_paramConfig& config,
                                 uint32_t level);
 
-  void reset_callback(const franka_control::ErrorRecoveryActionGoal&  msg);
+  void reset_callback(const franka_msgs::ErrorRecoveryActionGoal&  msg);
   void ft_ref_callback(const geometry_msgs::WrenchStamped::ConstPtr& msg);
   void imp_pos_ref_callback(const geometry_msgs::Point::ConstPtr& msg);
 

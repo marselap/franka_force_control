@@ -230,7 +230,7 @@ void ForceExampleController::gripper_type_callback(
 }
 
 void ForceExampleController::reset_callback(
-  const franka_control::ErrorRecoveryActionGoal&  msg) {
+  const franka_msgs::ErrorRecoveryActionGoal&  msg) {
   f_err_int_.setZero();
   polyfit_history = 0;
   flag_reset_ = 0;
@@ -380,7 +380,7 @@ void ForceExampleController::update(const ros::Time& /*time*/, const ros::Durati
 
   for (int i = 0; i < 6; i++){
     force_filtered_[i] = force_filter_[i].filter(force_meas_array[i] 
-       - force_meas_init_[i]) - force_cor[i];
+       - force_meas_init_[i]);// - force_cor[i];
     force_meas_array[i] = force_filtered_[i];
   }
   
@@ -455,9 +455,13 @@ void ForceExampleController::update(const ros::Time& /*time*/, const ros::Durati
     force_imp[1] = 0.0;
     force_imp[2] = 0.0;
 
-    force_imp[3] = orientation_pid_roll.compute((float)target_tx_, orientation_meas[0], dt);
-    force_imp[4] = orientation_pid_pitch.compute((float)target_ty_, orientation_meas[1], dt);
-    force_imp[5] = orientation_pid_yaw.compute((float)target_tz_, orientation_meas[2], dt);
+    force_imp[3] = 0.0;
+    force_imp[4] = 0.0;
+    force_imp[5] = 0.0;
+
+    // force_imp[3] = orientation_pid_roll.compute((float)target_tx_, orientation_meas[0], dt);
+    // force_imp[4] = orientation_pid_pitch.compute((float)target_ty_, orientation_meas[1], dt);
+    // force_imp[5] = orientation_pid_yaw.compute((float)target_tz_, orientation_meas[2], dt);
 
     for (int i = 0; i < 6; i++ ){
       force_pid[i] = wrench_pid[i].compute(force_imp[i], force_meas[i], dt);
@@ -532,6 +536,10 @@ void ForceExampleController::update(const ros::Time& /*time*/, const ros::Durati
   // tau_pid << jacobian.transpose() * (force_pid);
 
   tau_cmd_pid << saturateTorqueRate(tau_pid, tau_J_d);
+
+  std::cout << "AAAAA" << std::endl << std::endl << std::endl << std::endl;
+  std::cout << force_pid << std::endl << std::endl << std::endl << std::endl;
+  std::cout << tau_pid << std::endl << std::endl << std::endl << std::endl;
 
   for (size_t i = 0; i < 7; ++i) {
     joint_handles_[i].setCommand(tau_cmd_pid(i));

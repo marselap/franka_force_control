@@ -14,8 +14,7 @@
 #include <franka/errors.h>
 
 #include "pseudo_inversion.h"
-
-#include "pulse.h"
+// #include "pulse.h"
 
 #define LO -1.0
 #define HI 1.0
@@ -26,26 +25,26 @@
 
 namespace franka_force_control {
 
-bool TuneForcePid::init(hardware_interface::RobotHW* robot_hw,
+bool TuneForcePidController::init(hardware_interface::RobotHW* robot_hw,
                                   ros::NodeHandle& node_handle) {
   std::vector<std::string> joint_names;
   std::string arm_id;
   ROS_WARN(
-      "TuneForcePid: Assuming SOFT gripper!");
+      "TuneForcePidController: Assuming SOFT gripper!");
   if (!node_handle.getParam("arm_id", arm_id)) {
-    ROS_ERROR("TuneForcePid: Could not read parameter arm_id");
+    ROS_ERROR("TuneForcePidController: Could not read parameter arm_id");
     return false;
   }
   if (!node_handle.getParam("joint_names", joint_names) || joint_names.size() != 7) {
     ROS_ERROR(
-        "TuneForcePid: Invalid or no joint_names parameters provided, aborting "
+        "TuneForcePidController: Invalid or no joint_names parameters provided, aborting "
         "controller init!");
     return false;
   }
 
   auto* model_interface = robot_hw->get<franka_hw::FrankaModelInterface>();
   if (model_interface == nullptr) {
-    ROS_ERROR_STREAM("TuneForcePid: Error getting model interface from hardware");
+    ROS_ERROR_STREAM("TuneForcePidController: Error getting model interface from hardware");
     return false;
   }
   try {
@@ -53,13 +52,13 @@ bool TuneForcePid::init(hardware_interface::RobotHW* robot_hw,
         model_interface->getHandle(arm_id + "_model"));
   } catch (hardware_interface::HardwareInterfaceException& ex) {
     ROS_ERROR_STREAM(
-        "TuneForcePid: Exception getting model handle from interface: " << ex.what());
+        "TuneForcePidController: Exception getting model handle from interface: " << ex.what());
     return false;
   }
 
   auto* state_interface = robot_hw->get<franka_hw::FrankaStateInterface>();
   if (state_interface == nullptr) {
-    ROS_ERROR_STREAM("TuneForcePid: Error getting state interface from hardware");
+    ROS_ERROR_STREAM("TuneForcePidController: Error getting state interface from hardware");
     return false;
   }
   try {
@@ -67,24 +66,25 @@ bool TuneForcePid::init(hardware_interface::RobotHW* robot_hw,
         state_interface->getHandle(arm_id + "_robot"));
   } catch (hardware_interface::HardwareInterfaceException& ex) {
     ROS_ERROR_STREAM(
-        "TuneForcePid: Exception getting state handle from interface: " << ex.what());
+        "TuneForcePidController: Exception getting state handle from interface: " << ex.what());
     return false;
   }
 
   auto* effort_joint_interface = robot_hw->get<hardware_interface::EffortJointInterface>();
   if (effort_joint_interface == nullptr) {
-    ROS_ERROR_STREAM("TuneForcePid: Error getting effort joint interface from hardware");
+    ROS_ERROR_STREAM("TuneForcePidController: Error getting effort joint interface from hardware");
     return false;
   }
   for (size_t i = 0; i < 7; ++i) {
     try {
       joint_handles_.push_back(effort_joint_interface->getHandle(joint_names[i]));
     } catch (const hardware_interface::HardwareInterfaceException& ex) {
-      ROS_ERROR_STREAM("TuneForcePid: Exception getting joint handles: " << ex.what());
+      ROS_ERROR_STREAM("TuneForcePidController: Exception getting joint handles: " << ex.what());
       return false;
     }
   }
 
+  seq.setParams(0, 1, 2, 10);
 
   std::vector<double> fp, fi, fd, mp, mi, md;
   node_handle.getParam("/fp", fp);
@@ -142,6 +142,12 @@ bool TuneForcePid::init(hardware_interface::RobotHW* robot_hw,
   }
 
 
+  node_handle.getParam("/step_count", step_count);
+  node_handle.getParam("/ramp_slopes", ramp_slopes);
+  node_handle.getParam("/steps", steps);
+  node_handle.getParam("/joint_torque_ctrl_id", joint_torque_ctrl_id);
+
+
 
   dynamic_reconfigure_desired_mass_param_node_ =
       ros::NodeHandle("dynamic_reconfigure_desired_mass_param_node");
@@ -149,17 +155,19 @@ bool TuneForcePid::init(hardware_interface::RobotHW* robot_hw,
       dynamic_reconfigure::Server<franka_force_control::desired_mass_paramConfig>>(
       dynamic_reconfigure_desired_mass_param_node_);
   dynamic_server_desired_mass_param_->setCallback(
-      boost::bind(&TuneForcePid::desiredMassParamCallback, this, _1, _2));
+      boost::bind(&TuneForcePidController::desiredMassParamCallback, this, _1, _2));
 
   tau_ext_pub = node_handle.advertise<std_msgs::Float32MultiArray>("tau_ext", 1);
   tau_d_pub = node_handle.advertise<std_msgs::Float32MultiArray>("tau_d", 1);
   tau_cmd_pub = node_handle.advertise<std_msgs::Float32MultiArray>("tau_cmd", 1);
 
+  force_g_pub = node_handle.advertise<geometry_msgs::WrenchStamped>("/franka_state_controller/F_g", 1);
+  force_c_pub = node_handle.advertise<geometry_msgs::WrenchStamped>("/franka_state_controller/F_c", 1);
 
   reset_sub_ = node_handle.subscribe("/franka_control/error_recovery/goal", 1,
-    &TuneForcePid::reset_callback, this);
+    &TuneForcePidController::reset_callback, this);
   force_torque_ref_ = node_handle.subscribe("/ft_ref", 1,
-    &TuneForcePid::ft_ref_callback, this);
+    &TuneForcePidController::ft_ref_callback, this);
 
   ori_pid_roll_msg_pub_ = node_handle.advertise<franka_force_control::PIDController>("ori_pid_roll_msg", 1);
   ori_pid_pitch_msg_pub_ = node_handle.advertise<franka_force_control::PIDController>("ori_pid_pitch_msg", 1);
@@ -175,12 +183,12 @@ bool TuneForcePid::init(hardware_interface::RobotHW* robot_hw,
   return true;
 }
 
-void TuneForcePid::reset_callback(
-  const franka_control::ErrorRecoveryActionGoal&  msg) {
+void TuneForcePidController::reset_callback(
+  const franka_msgs::ErrorRecoveryActionGoal&  msg) {
   f_err_int_.setZero();
 }
 
-void TuneForcePid::ft_ref_callback(
+void TuneForcePidController::ft_ref_callback(
   const geometry_msgs::WrenchStamped::ConstPtr& msg){
 
   target_x_ = msg->wrench.force.x;
@@ -194,7 +202,7 @@ void TuneForcePid::ft_ref_callback(
 }
 
 
-void TuneForcePid::starting(const ros::Time& /*time*/) {
+void TuneForcePidController::starting(const ros::Time& /*time*/) {
   franka::RobotState robot_state = state_handle_->getRobotState();
   std::array<double, 7> gravity_array = model_handle_->getGravity();
   Eigen::Map<Eigen::Matrix<double, 7, 1>> tau_measured(robot_state.tau_J.data());
@@ -221,10 +229,13 @@ void TuneForcePid::starting(const ros::Time& /*time*/) {
   Eigen::Map<Eigen::Matrix<double, 6, 1>> force_meas_init(force_meas_array.data());
   force_meas_init_ = force_meas_init;
 
+  elapsed_time_ = ros::Duration(0);
+  seq.setParams(0, 1, 2, 1000);
+
 
 }
 
-void TuneForcePid::update(const ros::Time& /*time*/, const ros::Duration& period) {
+void TuneForcePidController::update(const ros::Time& /*time*/, const ros::Duration& period) {
   
   franka::RobotState robot_state = state_handle_->getRobotState();
 
@@ -257,12 +268,32 @@ void TuneForcePid::update(const ros::Time& /*time*/, const ros::Duration& period
 
   Eigen::Map<Eigen::Matrix<double, 6, 1>> force_meas_no_filt(force_meas_array.data());
 
-  Eigen::Matrix<double, 6, 1> force_cor;
+  Eigen::Matrix<double, 6, 1> force_cor, force_g;
   force_cor = jacobian * coriolis;
+  force_g = jacobian * gravity;
+
+  geometry_msgs::WrenchStamped f_msg;
+  f_msg.header.stamp = ros::Time::now();
+  f_msg.wrench.force.x = force_g[0];
+  f_msg.wrench.force.y = force_g[1];
+  f_msg.wrench.force.z = force_g[2];
+  f_msg.wrench.torque.x = force_g[3];
+  f_msg.wrench.torque.y = force_g[4];
+  f_msg.wrench.torque.z = force_g[5];
+  force_g_pub.publish(f_msg);
+  f_msg.header.stamp = ros::Time::now();
+  f_msg.wrench.force.x = force_cor[0];
+  f_msg.wrench.force.y = force_cor[1];
+  f_msg.wrench.force.z = force_cor[2];
+  f_msg.wrench.torque.x = force_cor[3];
+  f_msg.wrench.torque.y = force_cor[4];
+  f_msg.wrench.torque.z = force_cor[5];
+  force_c_pub.publish(f_msg);
+
 
   for (int i = 0; i < 6; i++){
     force_filtered_[i] = force_filter_[i].filter(force_meas_array[i] 
-       - force_meas_init_[i]) - force_cor[i];
+       - force_meas_init_[i]);// - force_cor[i];
     force_meas_array[i] = force_filtered_[i];
   }
   
@@ -272,6 +303,26 @@ void TuneForcePid::update(const ros::Time& /*time*/, const ros::Duration& period
   Eigen::Matrix<double, 6, 1> force_pid, force_ref;
   force_ref.setZero();
 
+
+  elapsed_time_ += period;
+  int pulseTime = (int) std::floor(elapsed_time_.toNSec() / 1e6);
+
+  if (prev_active_ != seq.isActive(pulseTime, 0)) {
+    dir_ref_ *= -1;
+  }
+  prev_active_ = seq.isActive(pulseTime, 0);
+
+  if (dir_ref_ * (dir_ref_ * ref_max - ref) > dref) {
+    ref +=  dir_ref_ * dref;
+  }
+  else {
+    ref = dir_ref_ * ref_max;
+  }
+
+  ctrld = 4;
+  // force_ref[ctrld] = ref;
+
+  // std::cout << ref << std::endl;
 
   if (mode_ == franka::RobotMode::kMove && period.toSec() > 0.) {
 
@@ -289,34 +340,28 @@ void TuneForcePid::update(const ros::Time& /*time*/, const ros::Duration& period
 
     wrapErrToPi(orientation_meas);
 
-    const int N = 5; // repeat N times
-    const int start = -3;
-    const int duration = 3;
-    const int interval = 5;
-    
-    sequence seq(start, duration, interval, N);
+    // force_ref[0] = 0.0;
+    // force_ref[1] = 0.0;
+    // force_ref[2] = 0.0;
 
-    force_ref[0] = 0.0;
-    force_ref[1] = 0.0;
-    force_ref[2] = 0.0;
-
-    force_ref[3] = orientation_pid_roll.compute((float)target_tx_, orientation_meas[0], dt);
-    force_ref[4] = orientation_pid_pitch.compute((float)target_ty_, orientation_meas[1], dt);
-    force_ref[5] = orientation_pid_yaw.compute((float)target_tz_, orientation_meas[2], dt);
+    // force_ref[3] = orientation_pid_roll.compute((float)target_tx_, orientation_meas[0], dt);
+    // force_ref[4] = orientation_pid_pitch.compute((float)target_ty_, orientation_meas[1], dt);
+    // force_ref[5] = orientation_pid_yaw.compute((float)target_tz_, orientation_meas[2], dt);
 
     franka_force_control::PIDController pid_msg;
-    orientation_pid_roll.create_msg(pid_msg);
-    ori_pid_roll_msg_pub_.publish(pid_msg);
+    // orientation_pid_roll.create_msg(pid_msg);
+    // ori_pid_roll_msg_pub_.publish(pid_msg);
 
-    orientation_pid_pitch.create_msg(pid_msg);
-    ori_pid_pitch_msg_pub_.publish(pid_msg);
+    // orientation_pid_pitch.create_msg(pid_msg);
+    // ori_pid_pitch_msg_pub_.publish(pid_msg);
 
-    orientation_pid_yaw.create_msg(pid_msg);
-    ori_pid_yaw_msg_pub_.publish(pid_msg);
+    // orientation_pid_yaw.create_msg(pid_msg);
+    // ori_pid_yaw_msg_pub_.publish(pid_msg);
 
 
     for (int i = 0; i < 6; i++ ){
-      force_pid[i] = wrench_pid[i].compute(force_ref[i], force_meas[i], dt);
+      // force_pid[i] = wrench_pid[i].compute(force_ref[i], force_meas[i], dt);
+      force_pid[i] = wrench_pid[i].compute(force_des[i], force_meas[i], dt);
     }
 
     for (int i = 0; i < 6; i++ ){
@@ -354,9 +399,18 @@ void TuneForcePid::update(const ros::Time& /*time*/, const ros::Duration& period
   // tau_pid << jacobian_reduced.transpose() * (force_pid);
 
   Eigen::MatrixXd jacobian_pinv;
-  pseudoInverse(jacobian_reduced, jacobian_pinv);
+  // pseudoInverse(jacobian_reduced, jacobian_pinv);
+
+  // pseudoInverse(jacobian, jacobian_pinv);
+  // std::cout << jacobian_pinv << std::endl;
+
+  jacobian_pinv = jacobian.transpose();
 
   tau_pid << jacobian_pinv * (force_pid);
+
+  // tau_pid[6] = ref;
+  // ramp_ref();
+  // tau_pid[joint_torque_ctrl_id] = joint_torque_ref_;
 
   tau_cmd_pid << saturateTorqueRate(tau_pid, tau_J_d);
 
@@ -367,11 +421,41 @@ void TuneForcePid::update(const ros::Time& /*time*/, const ros::Duration& period
   tau_ext = tau_measured - gravity - tau_ext_initial_;
   tau_d << jacobian.transpose() * desired_force_torque;
 
-  debug_publish_tau(tau_ext, tau_d, tau_cmd_pid);
+  // debug_publish_tau(tau_measured, tau_pid, tau_cmd_pid);
+  debug_publish_tau(tau_ext, tau_pid, tau_cmd_pid);
 
 }
 
-void TuneForcePid::debug_publish_tau(Eigen::VectorXd tau_ext, Eigen::VectorXd tau_d, Eigen::VectorXd tau_cmd_pid){
+
+void TuneForcePidController::ramp_ref() {
+
+  int cnt;
+  float ramp_slope, step;
+  cnt = step_count[ramp_phase];
+
+  if (ramp_cnt >= cnt) {
+    ramp_cnt = 0;
+    ramp_phase = ramp_phase + 1;
+    ramp_first_pass = false;
+    if (ramp_phase > 3) {
+      ramp_phase = 0;
+    }
+  } 
+
+  ramp_slope = ramp_slopes[ramp_phase];
+  step = steps[ramp_phase];
+
+  joint_torque_ref_ = joint_torque_ref_ + ramp_slope * step;
+  
+  ramp_cnt += 1;
+
+  if ((ramp_phase == 0) and (ramp_first_pass)) {
+    ramp_cnt += 1;
+  }
+
+}
+
+void TuneForcePidController::debug_publish_tau(Eigen::VectorXd tau_ext, Eigen::VectorXd tau_d, Eigen::VectorXd tau_cmd_pid){
 
   std_msgs::Float32MultiArray array_ext, array_d, array_cmd;
   for(int i = 0; i < 7; i++) {
@@ -387,7 +471,7 @@ void TuneForcePid::debug_publish_tau(Eigen::VectorXd tau_ext, Eigen::VectorXd ta
 
 
 
-void TuneForcePid::wrapErrToPi(float* orientation_meas){
+void TuneForcePidController::wrapErrToPi(float* orientation_meas){
 
   double err = target_tx_ - orientation_meas[0];
   if (err > 3.141592) {
@@ -415,11 +499,15 @@ void TuneForcePid::wrapErrToPi(float* orientation_meas){
 }
 
 
-void TuneForcePid::desiredMassParamCallback(
+void TuneForcePidController::desiredMassParamCallback(
     franka_force_control::desired_mass_paramConfig& config,
     uint32_t /*level*/) {
   
   if (starting_ == true) {
+
+
+    config.ref_t = ref_max;
+    config.dref = dref;
 
     config.o_p_x = pid_ori_x(0, 0);
     config.o_i_x = pid_ori_x(0, 1);
@@ -456,6 +544,9 @@ void TuneForcePid::desiredMassParamCallback(
     starting_ = false;
   }
   else {
+
+    ref_max = config.ref_t;
+    dref = config.dref;
 
     pid_ori_x(0, 0) = config.o_p_x;
     pid_ori_x(0, 1) = config.o_i_x;
@@ -511,19 +602,21 @@ void TuneForcePid::desiredMassParamCallback(
   }
 }
 
-Eigen::Matrix<double, 7, 1> TuneForcePid::saturateTorqueRate(
+Eigen::Matrix<double, 7, 1> TuneForcePidController::saturateTorqueRate(
     const Eigen::Matrix<double, 7, 1>& tau_d_calculated,
     const Eigen::Matrix<double, 7, 1>& tau_J_d) {  // NOLINT (readability-identifier-naming)
   Eigen::Matrix<double, 7, 1> tau_d_saturated{};
   for (size_t i = 0; i < 7; i++) {
     double difference = tau_d_calculated[i] - tau_J_d[i];
+    if ((difference > kDeltaTauMax) || (difference < -kDeltaTauMax))
+      std::cout << "ZASICENJE. ref: " << ref << std::endl;
     tau_d_saturated[i] = tau_J_d[i] + std::max(std::min(difference, kDeltaTauMax), -kDeltaTauMax);
   }
   return tau_d_saturated;
 }
 
 
-void TuneForcePid::getAnglesFromRotationTranslationMatrix(Eigen::Matrix4d &rotationTranslationMatrix,
+void TuneForcePidController::getAnglesFromRotationTranslationMatrix(Eigen::Matrix4d &rotationTranslationMatrix,
  float *angles)
 {
   double r11, r21, r31, r32, r33;
@@ -545,7 +638,7 @@ void TuneForcePid::getAnglesFromRotationTranslationMatrix(Eigen::Matrix4d &rotat
 }
 
 
-void TuneForcePid::filter_new_params(){
+void TuneForcePidController::filter_new_params(){
     desired_x_ = filter_gain_ * target_x_ + (1 - filter_gain_) * desired_x_;
     desired_y_ = filter_gain_ * target_y_ + (1 - filter_gain_) * desired_y_;
     desired_z_ = filter_gain_ * target_z_ + (1 - filter_gain_) * desired_z_;
@@ -573,5 +666,5 @@ void TuneForcePid::filter_new_params(){
 
 }  // namespace franka_force_control
 
-PLUGINLIB_EXPORT_CLASS(franka_force_control::TuneForcePid,
+PLUGINLIB_EXPORT_CLASS(franka_force_control::TuneForcePidController,
                        controller_interface::ControllerBase)

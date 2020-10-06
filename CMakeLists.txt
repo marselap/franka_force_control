@@ -20,7 +20,7 @@ find_package(catkin REQUIRED COMPONENTS
   franka_control
   std_msgs
 )
-
+ 
 find_package(Eigen3 REQUIRED)
 find_package(Franka 0.5.0 REQUIRED)
 
@@ -55,17 +55,20 @@ catkin_package(
 )
 
 add_library(franka_force_control
-  src/model_example_controller.cpp
-  src/force_example_controller.cpp
-  src/tune_force_pid.cpp
-  src/force_ctrl_reconstruct.cpp
-  src/cartesian_pose_example_controller.cpp
+  #src/model_example_controller.cpp
+  #src/force_example_controller.cpp
+  #src/force_ctrl_reconstruct.cpp
+  #src/cartesian_pose_example_controller.cpp
 
   src/median_filter.cpp
   src/Tf2.cpp
   src/Tf1.cpp
 
   src/pid.cpp
+
+  #src/tune_force_pid.cpp
+
+  src/impedant_explorer.cpp
 )
 
 add_dependencies(franka_force_control

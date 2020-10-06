@@ -179,7 +179,7 @@ void ForceCtrlReconstruct::gripper_type_callback(
 }
 
 void ForceCtrlReconstruct::reset_callback(
-  const franka_control::ErrorRecoveryActionGoal&  msg) {
+  const franka_msgs::ErrorRecoveryActionGoal&  msg) {
   f_err_int_.setZero();
   polyfit_history = 0;
   flag_reset_ = 0;
