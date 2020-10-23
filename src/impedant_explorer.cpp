@@ -822,7 +822,7 @@ Eigen::Matrix<double, 6, 1> ImpedantExplorer::impedanceOpenLoop(
   velRefLoc = dXlocal.block<3,1>(0,0);
   if (velRefLoc.norm() > 0.0) {
     velRefLoc.normalize();
-    velRefLoc = 0.3 * velRefLoc;
+    velRefLoc = 0.15 * velRefLoc;
   }
 
   Eigen::Matrix<double, 3, 3> R_base;
@@ -888,11 +888,19 @@ Eigen::Matrix<double, 6, 1> ImpedantExplorer::impedanceOpenLoop(
 
     globycur << refDirGlob[0], refDirGlob[1], refDirGlob[2];
 
-    Eigen::Vector3d locx;
-    locx << 1, 0, 0;
-    globxcur = R_base * locx;
+    // Eigen::Vector3d locx;
+    // locx << 1, 0, 0;
+    // globxcur = R_base * locx;
 
-    globzcur = globxcur.cross(globycur);
+    // globzcur = globxcur.cross(globycur);
+
+
+    Eigen::Vector3d locz;
+    locz << 0, 0, 1.;
+    globzcur = R_base * locz;
+
+    globxcur = globycur.cross(globzcur);
+
 
     globxcur.normalize();
     globycur.normalize();
@@ -975,8 +983,16 @@ Eigen::Matrix<double, 6, 1> ImpedantExplorer::impedanceOpenLoop(
     rot_vel << -r_transform(1,2), r_transform(0,2), -r_transform(0,1);
 
     // rot_vel = rot_vel + f_ext.block<3,1>(3,0);
+    
+
+    // rot_vel[0] = f_ext[3];
+    // rot_vel[1] = f_ext[4];
+
+
     rot_vel[0] += f_ext[3];
     rot_vel[1] += f_ext[4];
+
+
     // rot_vel[2] -= f_ext[5];
 
     std::cout << rot_vel.transpose() << std::endl << std::endl << std::endl;
@@ -1011,8 +1027,8 @@ Eigen::Matrix<double, 6, 1> ImpedantExplorer::impedanceOpenLoop(
     //   force_torque[i+3] = moments[i] + 0.5 * moments_wiggle[i];
     // }
     // else
-      force_torque[i+3] = moments[i];
-      // force_torque[i+3] = moments[i] + moments_wiggle[i];
+      // force_torque[i+3] = moments[i];
+      force_torque[i+3] = moments[i] + moments_wiggle[i];
   }
 
   pos_global_prev_ = posGlobal;
@@ -1042,10 +1058,11 @@ Eigen::Matrix<double, 3, 1> ImpedantExplorer::wiggle(float velocity_amplitude) {
       if (loc_d_x_ < 0.) {
         predznak *= -1.;
       }
-      if (prob > 0.4) {
+      if (prob > 0.3) {
         predznak *= -1.;
       }
       rand_vec[0] = 0.3 * rand_vec[0];
+      // rand_vec[1] = 0.3 * rand_vec[1];
       rand_vec[1] = predznak * fabs(rand_vec[1]);
       rand_vec[2] = 0.3 * rand_vec[2];
     }
