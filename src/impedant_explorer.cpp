@@ -139,10 +139,20 @@ bool ImpedantExplorer::init(hardware_interface::RobotHW* robot_hw,
     ros::param::get("/imp_scale_m_i_", imp_scale_m_i_);
     target_imp_scale_m_i_ = imp_scale_m_i_;
   }
+  if (ros::param::has("/mom_x")) {
+    ros::param::get("/mom_x", moment_x_gain_);
+  }
+  if (ros::param::has("/mom_y")) {
+    ros::param::get("/mom_y", moment_y_gain_);
+  }
+
+  std::cout << "moment x gain " << moment_x_gain_ << std::endl;
 
   tau_ext_pub = node_handle.advertise<std_msgs::Float32MultiArray>("tau_ext", 1);
   tau_d_pub = node_handle.advertise<std_msgs::Float32MultiArray>("tau_d", 1);
   tau_cmd_pub = node_handle.advertise<std_msgs::Float32MultiArray>("tau_cmd", 1);
+
+  incline_pub = node_handle.advertise<std_msgs::Float32MultiArray>("local_model", 1);
 
   force_g_pub = node_handle.advertise<geometry_msgs::WrenchStamped>("/franka_state_controller/F_g", 1);
   force_c_pub = node_handle.advertise<geometry_msgs::WrenchStamped>("/franka_state_controller/F_c", 1);
@@ -151,6 +161,8 @@ bool ImpedantExplorer::init(hardware_interface::RobotHW* robot_hw,
     &ImpedantExplorer::reset_callback, this);
   force_torque_ref_ = node_handle.subscribe("/ft_ref", 1,
     &ImpedantExplorer::ft_ref_callback, this);
+
+  force_meas_sub_ = node_handle.subscribe("/optoforce_node/OptoForceWrench", 1, &ImpedantExplorer::force_meas_cb, this);
 
   impedance_pos_ref_ = node_handle.subscribe("/exploration_direction", 1, 
     &ImpedantExplorer::imp_pos_ref_callback, this);
@@ -207,9 +219,38 @@ void ImpedantExplorer::imp_pos_ref_callback(
   loc_d_x_ = msg->x;
   loc_d_y_ = msg->y;
   loc_d_z_ = msg->z;
-
-
 }
+
+
+void ImpedantExplorer::force_meas_cb(const geometry_msgs::WrenchStamped::ConstPtr& msg)
+{
+
+  double x0, y0;
+  double x1, y1;
+
+  x0 = msg->wrench.force.x;
+  y0 = msg->wrench.force.y;
+
+  double theta = -30. * 3.14 / 180.;
+  double c = cos(theta);
+  double s = sin(theta);
+
+  x1 = c * x0 - s * y0;
+  y1 = s * x0 + c * y0;
+
+  force_meas_array[0] = x1;
+  force_meas_array[1] = y1;
+  force_meas_array[2] = msg->wrench.force.z;
+
+  force_meas_array[3] = msg->wrench.torque.x;
+  force_meas_array[4] = msg->wrench.torque.y;
+  force_meas_array[5] = msg->wrench.torque.z;
+  
+
+
+  new_force_meas_ = true;
+}
+
 
 void ImpedantExplorer::starting(const ros::Time& /*time*/) {
 
@@ -242,7 +283,8 @@ void ImpedantExplorer::starting(const ros::Time& /*time*/) {
   vel_global_prev_ << 0., 0., 0.;
   dXglobal_ << pos_global_prev_(0), pos_global_prev_(1), pos_global_prev_(2), 1.;
 
-  std::array<double, 6> force_meas_array = robot_state.O_F_ext_hat_K;
+  //   std::array<double, 6> force_meas_array = robot_state.O_F_ext_hat_K;
+  force_meas_array = {0., 0., 0., 0., 0., 0.};
   Eigen::Map<Eigen::Matrix<double, 6, 1>> force_meas_init(force_meas_array.data());
   force_meas_init_ = force_meas_init;
 
@@ -275,8 +317,10 @@ void ImpedantExplorer::update(const ros::Time& /*time*/, const ros::Duration& pe
 
   std::array<double, 16> T_base_arr = robot_state.O_T_EE;
   Eigen::Map<Eigen::Matrix<double, 4, 4>> T_base(T_base_arr.data());
+//   std::array<double, 42> jacobian_array =
+//       model_handle_->getZeroJacobian(franka::Frame::kEndEffector);
   std::array<double, 42> jacobian_array =
-      model_handle_->getZeroJacobian(franka::Frame::kEndEffector);
+      model_handle_->getZeroJacobian(franka::Frame::kFlange);
   Eigen::Map<Eigen::Matrix<double, 6, 7>> jacobian(jacobian_array.data());
   Eigen::Map<Eigen::Matrix<double, 7, 1>> tau_J_d(robot_state.tau_J_d.data());
 
@@ -286,17 +330,21 @@ void ImpedantExplorer::update(const ros::Time& /*time*/, const ros::Duration& pe
   std::array<double, 7> coriolis_array = model_handle_->getCoriolis();
   Eigen::Map<Eigen::Matrix<double, 7, 1>> coriolis(coriolis_array.data());
 
-  std::array<double, 6> force_meas_array = robot_state.O_F_ext_hat_K;
+//   std::array<double, 6> force_meas_array = robot_state.O_F_ext_hat_K;
 
-  Eigen::Map<Eigen::Matrix<double, 6, 1>> force_meas_no_filt(force_meas_array.data());
-
-  for (int i = 0; i < 6; i++){
-    force_filtered_[i] = force_filter_[i].filter(force_meas_array[i] 
-       - force_meas_init_[i]);// - force_cor[i];
-    force_meas_array[i] = force_filtered_[i];
+  if (new_force_meas_) {
+    for (int i = 0; i < 6; i++){
+        force_filtered_[i] = force_filter_[i].filter(force_meas_array[i] 
+        - force_meas_init_[i]);// - force_cor[i];
+        force_meas_array[i] = force_filtered_[i];
+        new_force_meas_ = false;
+    }
   }
-  
-  Eigen::Map<Eigen::Matrix<double, 6, 1>> force_meas(force_meas_array.data());
+
+  Eigen::Map<Eigen::Matrix<double, 6, 1>> force_meas_loc(force_meas_array.data());
+  Eigen::Matrix<double, 6, 1> force_meas;
+  force_meas.block<3,1>(0,0) = T_base.block<3,3>(0,0) * force_meas_loc.block<3,1>(0,0);
+  force_meas.block<3,1>(3,0) = T_base.block<3,3>(0,0) * force_meas_loc.block<3,1>(3,0);
 
   Eigen::VectorXd desired_force_torque(6);
   desired_force_torque << desired_x_, desired_y_, desired_z_, desired_tx_, desired_ty_, desired_tz_;
@@ -318,135 +366,6 @@ void ImpedantExplorer::update(const ros::Time& /*time*/, const ros::Duration& pe
   position = pos_glob.block(0,0,3,1);
 
 
-  // Eigen::Vector3d rot_vel(0.,0.,0.);
-
-  // Eigen::Vector3d globxcur, globycur, globzcur;
-  // Eigen::Vector3d globxref, globyref, globzref;
-  // Eigen::Matrix3d r_cur, r_ref, r_transform;
-  // //curr 
-  // locy << 0, -1, 0;
-  // Eigen::Matrix3d R_base;
-  // R_base = T_base.block<3,3>(0,0);
-
-  // globycur = R_base * locy;
-  // locx << 1, 0, 0;
-  // globxcur = R_base * locx;
-
-  // globzcur = globxcur.cross(globycur);
-
-  // globyref = incline_;
-  // globyref.normalize();
-
-  // double ref_frame_score[4] = {-1., -1., -1., -1.};
-
-  // globxref = globyref.cross(globycur);
-  // globzref = globxref.cross(globyref);
-  // globxref.normalize();
-  // globzref.normalize();
-  // ref_frame_score[0] = (double) (globxref.dot(globxcur) + globzref.dot(globzcur));
-
-  // globxref = globycur.cross(globyref);
-  // globzref = globxref.cross(globyref);
-  // globxref.normalize();
-  // globzref.normalize();
-  // ref_frame_score[1] = (double) (globxref.dot(globxcur) + globzref.dot(globzcur));
-
-  // globzref = globyref.cross(globycur);
-  // globxref = globyref.cross(globzref);
-  // globxref.normalize();
-  // globzref.normalize();
-  // ref_frame_score[2] =  (double) (globxref.dot(globxcur) + globzref.dot(globzcur));
-
-  // globzref = globycur.cross(globyref);
-  // globxref = globyref.cross(globzref);
-  // globxref.normalize();
-  // globzref.normalize();
-  // ref_frame_score[3] =  (double) (globxref.dot(globxcur) + globzref.dot(globzcur));
-
-  // const int N = sizeof(ref_frame_score) / sizeof(double);
-  // int best = std::distance(ref_frame_score, std::max_element(ref_frame_score, ref_frame_score + N));
-
-  // switch (best) {
-  //   case 0:
-  //     globxref = globyref.cross(globycur);
-  //     globzref = globxref.cross(globyref);
-  //     break;
-  //   case 1:
-  //     globxref = globycur.cross(globyref);
-  //     globzref = globxref.cross(globyref);
-  //     break;
-  //   case 2:
-  //     globzref = globyref.cross(globycur);
-  //     globxref = globyref.cross(globzref);
-  //     break;
-  //   case 3:
-  //     globzref = globycur.cross(globyref);
-  //     globxref = globyref.cross(globzref);
-  //     break;
-  // }
-  // globxref.normalize();
-  // globzref.normalize();
-
-  // r_cur << globxcur, globycur, globzcur;
-  // r_cur.transpose();
-
-  // r_ref << globxref, globyref, globzref;
-  // r_ref.transpose();
-
-  // r_transform = r_ref * r_cur.inverse();
-
-  // rot_vel << -r_transform(1,2), r_transform(0,2), -r_transform(0,1);
-
-
-
-    // ---------projekcije-------------
-    // Eigen::Matrix<float, 3, 1> ref3d, curr3d;
-    // ref3d << 1.0, 0.0, 0.0;
-    // curr3d << 0.0, 1.0, 0.0;
-    // Eigen::Vector3d rot_vel(0.,0.,0.);
-    
-    // Eigen::Matrix<float, 2, 1> axis;
-
-    // // xy 
-    // axis << 1.0, 0.0;
-    // Eigen::Matrix<float, 2, 1> ref, curr;
-    // ref << ref3d[0], ref3d[1];
-    // curr << curr3d[0], curr3d[1];
-    // if (ref.norm())
-    //   ref.normalize();
-    // if (curr.norm())
-    //   curr.normalize();
-    // if (ref.norm() && curr.norm())
-    //   rot_vel[2] = std::acos(ref.dot(axis)) - std::acos(curr.dot(axis)) ;
-
-    // // xz 
-    // ref << ref3d[0], r;ef3d[2];
-    // curr << curr3d[0], curr3d[2];
-    // if (ref.norm())
-    //   ref.normalize();
-    // if (curr.norm())
-    //   curr.normalize();
-    // if (ref.norm() && curr.norm())
-    //   rot_vel[1] = std::acos(ref.dot(axis)) - std::acos(curr.dot(axis)) ;
-
-    // // yz 
-    // ref << ref3d[1], ref3d[2];
-    // curr << curr3d[1], curr3d[2];
-    // if (ref.norm())
-    //   ref.normalize();
-    // if (curr.norm())
-    //   curr.normalize();
-    // if (ref.norm() && curr.norm())
-    //   rot_vel[0] = std::acos(ref.dot(axis)) - std::acos(curr.dot(axis)) ;
-
-    // std::cout << ref3d.transpose() << std::endl << std::endl;
-    // std::cout << curr3d.transpose() << std::endl << std::endl;
-    // std::cout << rot_vel.transpose() << std::endl << std::endl << std::endl;
-    // std::cout << "==========" << std::endl << std::endl;
-    
-
-
-
   if (mode_ == franka::RobotMode::kMove && period.toSec() > 0.) {
 
 
@@ -454,6 +373,7 @@ void ImpedantExplorer::update(const ros::Time& /*time*/, const ros::Duration& pe
       pipe_dir_freq_ = 20;
       incline = ImpedantExplorer::directionPrediction(position);
       target_incline_ = incline;
+      ImpedantExplorer::publish_local_model(target_incline_);
     }
     else {
       pipe_dir_freq_ -= 1;
@@ -482,6 +402,7 @@ void ImpedantExplorer::update(const ros::Time& /*time*/, const ros::Duration& pe
     for (int i = 0; i < 6; i++ ){
 
       force_pid[i] = wrench_pid[i].compute(force_ref[i], force_meas[i], dt);
+    //   std::cout << "fpid " << i << " " << force_pid[i] << std::endl;
       // force_pid[i] = wrench_pid[i].compute(force_des[i], force_meas[i], dt);
     }
 
@@ -520,31 +441,22 @@ void ImpedantExplorer::update(const ros::Time& /*time*/, const ros::Duration& pe
   jacobian_reduced.block<3,4>(0,0) = jacobian.block<3,4>(0,0);
   jacobian_reduced.block<3,3>(3,4) = jacobian.block<3,3>(3,4);
 
-  // tau_pid << jacobian_reduced.transpose() * (force_pid);
-
   Eigen::MatrixXd jacobian_pinv;
-  // pseudoInverse(jacobian_reduced, jacobian_pinv);
-
-  // pseudoInverse(jacobian, jacobian_pinv);
-  // std::cout << jacobian_pinv << std::endl;
-
   jacobian_pinv = jacobian.transpose();
+
+//   Eigen::Matrix<double, 3, 1> gripper_compensate, compensate_global;
+//   gripper_compensate.setZero();
+//   gripper_compensate(2) = -3.5;
+
+//   compensate_global = R_base * gripper_compensate;
+
+//   for(int i = 0; i<3;i++){
+//       force_pid(i) += compensate_global(i);
+//   }
 
   tau_pid << jacobian_pinv * (force_pid);
 
-  // tau_pid[6] = ref;
-  // ramp_ref();
-  // tau_pid[joint_torque_ctrl_id] = joint_torque_ref_;
-
   tau_cmd_pid << saturateTorqueRate(tau_pid, tau_J_d);
-
-
-  // std::cout << "AAAAA" << std::endl << std::endl << std::endl << std::endl;
-  // std::cout << force_des.transpose() << std::endl << std::endl << std::endl << std::endl;
-  // std::cout << force_meas.transpose() << std::endl << std::endl << std::endl << std::endl;
-  // std::cout << force_pid.transpose() << std::endl << std::endl << std::endl << std::endl;
-  // std::cout << tau_cmd_pid.transpose() << std::endl << std::endl << std::endl << std::endl;
-
 
   for (size_t i = 0; i < 7; ++i) {
     joint_handles_[i].setCommand(tau_cmd_pid(i));
@@ -554,14 +466,7 @@ void ImpedantExplorer::update(const ros::Time& /*time*/, const ros::Duration& pe
   tau_ext = tau_measured - gravity - tau_ext_initial_;
   tau_d << jacobian.transpose() * desired_force_torque;
 
-  // debug_publish_tau(tau_measured, tau_pid, tau_cmd_pid);
-  debug_publish_tau(tau_ext, tau_pid, tau_cmd_pid);
-
-  // std::cout << "12" << std::endl << std::endl << std::endl << std::endl;
-
-  // Eigen::Matrix<double, 6, 1> force_cor, force_g;
-  // force_cor = jacobian * coriolis;
-  // force_g = jacobian * gravity_arrayy;
+  debug_publish_tau(tau_J_d, tau_pid, tau_cmd_pid);
 
   geometry_msgs::WrenchStamped f_msg;
   f_msg.header.stamp = ros::Time::now();
@@ -572,17 +477,17 @@ void ImpedantExplorer::update(const ros::Time& /*time*/, const ros::Duration& pe
   f_msg.wrench.torque.y = force_imp[4];
   f_msg.wrench.torque.z = force_imp[5];
   force_g_pub.publish(f_msg);
-  // f_msg.header.stamp = ros::Time::now();
-  // f_msg.wrench.force.x = force_cor[0];
-  // f_msg.wrench.force.y = force_cor[1];
-  // f_msg.wrench.force.z = force_cor[2];
-  // f_msg.wrench.torque.x = force_cor[3];
-  // f_msg.wrench.torque.y = force_cor[4];
-  // f_msg.wrench.torque.z = force_cor[5];
-  // force_c_pub.publish(f_msg);
 
 
-  // std::cout << "13" << std::endl << std::endl << std::endl << std::endl;
+//   std::cout << "kp: " << wrench_pid[0].get_kp() << std::endl;
+//   std::cout << "kd: " << wrench_pid[0].get_kd() << std::endl;
+//   std::cout << "ki: " << wrench_pid[0].get_ki() << std::endl;
+//   std::cout << "fpid: " << force_pid(0) << std::endl;
+//   std::cout << "fpid: " << force_pid(1) << std::endl;
+//   std::cout << "fpid: " << force_pid(2) << std::endl;
+//   std::cout << "tau_J_d: " << tau_J_d(1) << std::endl;
+//   std::cout << "tau_pid: " << tau_pid(1) << std::endl;
+//   std::cout << "tau_cmd: " << tau_cmd_pid(1) << std::endl;
 
 }
 
@@ -599,6 +504,16 @@ void ImpedantExplorer::debug_publish_tau(Eigen::VectorXd tau_ext, Eigen::VectorX
   tau_d_pub.publish(array_d);
   tau_cmd_pub.publish(array_cmd);
 
+}
+
+
+void ImpedantExplorer::publish_local_model(Eigen::VectorXd target_incline)
+{
+    std_msgs::Float32MultiArray arr_incl;
+    for(int i = 0; i < 3; i++) {
+        arr_incl.data.push_back(target_incline[i]);
+    }
+    incline_pub.publish(arr_incl);
 }
 
 
@@ -644,6 +559,8 @@ void ImpedantExplorer::desiredMassParamCallback(
     config.scale = imp_scale_;
     config.scale_m = imp_scale_m_;
     config.scale_m_i = imp_scale_m_i_;
+    config.moment_x_gain = moment_x_gain_;
+    config.moment_y_gain = moment_y_gain_;
 
 
     config.f_p_x = ft_pid_target(0,0);
@@ -680,6 +597,8 @@ void ImpedantExplorer::desiredMassParamCallback(
     target_imp_scale_ = config.scale;
     target_imp_scale_m_ = config.scale_m;
     target_imp_scale_m_i_ = config.scale_m_i;
+    moment_x_gain_ = config.moment_x_gain;
+    moment_y_gain_ = config.moment_y_gain;
 
     ft_pid_target(0,0) = config.f_p_x;
     ft_pid_target(0,1) = config.f_i_x;
@@ -768,14 +687,6 @@ void ImpedantExplorer::filter_new_params(){
     }
 
     ft_pid = filter_gain_ * ft_pid_target + (1 - filter_gain_) * ft_pid;
-
-
-    // imp_d_ = filter_gain_ * target_imp_d_ + (1 - filter_gain_) * imp_d_; 
-    // imp_k_ = filter_gain_ * target_imp_k_ + (1 - filter_gain_) * imp_k_; 
-    // imp_m_ = filter_gain_ * target_imp_m_ + (1 - filter_gain_) * imp_m_; 
-    // imp_f_ = filter_gain_ * target_imp_f_ + (1 - filter_gain_) * imp_f_; 
-
-    // imp_scale_ = filter_gain_ * target_imp_scale_ + (1 - filter_gain_) * imp_scale_; 
 
     imp_d_ = target_imp_d_;
     imp_k_ = target_imp_k_;
@@ -873,7 +784,7 @@ Eigen::Matrix<double, 6, 1> ImpedantExplorer::impedanceOpenLoop(
 
   if (velRefGlob.norm() > 0.) {
 
-    std::cout << "AAA" << std::endl;
+    // std::cout << "AAA" << std::endl;
 
     refDirLoc << loc_d_x_, loc_d_y_, loc_d_z_;
     refDirLoc.normalize();
@@ -975,27 +886,24 @@ Eigen::Matrix<double, 6, 1> ImpedantExplorer::impedanceOpenLoop(
 
     r_transform = r_ref * r_cur.inverse();
 
-    std::cout << r_ref << std::endl << std::endl << std::endl ;
-    std::cout << r_cur << std::endl << std::endl << std::endl ;
-    std::cout << r_transform << std::endl << std::endl << std::endl ;
+    // std::cout << r_ref << std::endl << std::endl << std::endl ;
+    // std::cout << r_cur << std::endl << std::endl << std::endl ;
+    // std::cout << r_transform << std::endl << std::endl << std::endl ;
 
 
     rot_vel << -r_transform(1,2), r_transform(0,2), -r_transform(0,1);
 
     // rot_vel = rot_vel + f_ext.block<3,1>(3,0);
-    
 
     // rot_vel[0] = f_ext[3];
     // rot_vel[1] = f_ext[4];
 
-
-    rot_vel[0] += f_ext[3];
-    rot_vel[1] += f_ext[4];
-
+    rot_vel[0] += moment_x_gain_ * f_ext[3];
+    rot_vel[1] += moment_y_gain_ * f_ext[4];
 
     // rot_vel[2] -= f_ext[5];
 
-    std::cout << rot_vel.transpose() << std::endl << std::endl << std::endl;
+    // std::cout << rot_vel.transpose() << std::endl << std::endl << std::endl;
 
     moments_integrate_ = moments_integrate_ + rot_vel * period.toSec();
     // moments_integrate_ = moments_integrate_ + (incline - refDirGlob) * period.toSec();

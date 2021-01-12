@@ -31,3 +31,6 @@ imp_f_: 0.1
 
 imp_scale_m_: 1.2 #0.5 #rigid0.5 soft? 0
 imp_scale_m_i_: 0.1 #0.05 # rigid 0.05 soft ? 0
+
+mom_x : 1.0
+mom_y : 1.0

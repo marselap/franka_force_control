@@ -64,6 +64,7 @@ class ImpedantExplorer : public controller_interface::MultiInterfaceController<
   ros::Publisher pos_ref_glob_pub, pos_glob_pub;
   ros::Publisher marker_pos_, marker_pip_;
   ros::Subscriber reset_sub_, force_torque_ref_, impedance_pos_ref_, gripper_type_sub_;
+  ros::Subscriber force_meas_sub_;
   std::unique_ptr<franka_hw::FrankaModelHandle> model_handle_;
   std::unique_ptr<franka_hw::FrankaStateHandle> state_handle_;
   std::vector<hardware_interface::JointHandle> joint_handles_;
@@ -141,35 +142,31 @@ class ImpedantExplorer : public controller_interface::MultiInterfaceController<
   ros::NodeHandle dynamic_reconfigure_desired_mass_param_node_;
   void desiredMassParamCallback(franka_force_control::desired_mass_paramConfig& config,
                                 uint32_t level);
-
   void reset_callback(const franka_msgs::ErrorRecoveryActionGoal&  msg);
   void ft_ref_callback(const geometry_msgs::WrenchStamped::ConstPtr& msg);
   void imp_pos_ref_callback(const geometry_msgs::Point::ConstPtr& msg);
+  void force_meas_cb(const geometry_msgs::WrenchStamped::ConstPtr& msg);
 
   void rviz_markers_plot(Eigen::VectorXd position);
-
   void getAnglesFromRotationTranslationMatrix(Eigen::Matrix4d &rotationTranslationMatrix, float *angles);
-
   void filter_new_params();
   void wrapErrToPi(float* orientation_meas);
-
   void debug_publish_tau(Eigen::VectorXd tau_ext, Eigen::VectorXd tau_d, Eigen::VectorXd tau_cmd_pid);
-
-
-
   Eigen::Matrix<double, 6, 1> impedanceOpenLoop(const ros::Duration& period, 
                                                 Eigen::Matrix<double, 6, 1> f_ext, 
                                                 Eigen::VectorXd incline);
-
+  void publish_local_model(Eigen::VectorXd target_incline);
+  ros::Publisher incline_pub;
 
   median_filter filter_x_, filter_y_, filter_z_;
-
   median_filter force_filter_[6];
-
   float force_filt_x_, force_filt_y_, force_filt_z_;
   std::array<double, 6> force_filtered_;
 
   Eigen::Matrix<double, 6, 1> force_meas_init_;
+  std::array<double, 6> force_meas_array;
+  bool new_force_meas_;
+
 
   int median_size_;
 
@@ -181,6 +178,7 @@ class ImpedantExplorer : public controller_interface::MultiInterfaceController<
   Eigen::Matrix<double, 4, 1> dXglobal_;
   double imp_f_{0.1}, imp_m_{3.}, imp_d_{31.6228}, imp_k_{50.}, imp_scale_{5.0}, imp_scale_m_{0.0}, imp_scale_m_i_{0.0};
   double target_imp_f_{0.}, target_imp_m_{0.}, target_imp_d_{10.}, target_imp_k_{2.5}, target_imp_scale_{4.0}, target_imp_scale_m_{0.0}, target_imp_scale_m_i_{0.0};
+  double moment_x_gain_{1.0}, moment_y_gain_{1.0};
 
   Eigen::Matrix<double, 4, 1> posGlEE_prev_;
 

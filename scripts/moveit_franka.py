@@ -9,9 +9,11 @@ import moveit_msgs.msg
 import geometry_msgs.msg
 from math import pi
 
-from std_msgs.msg import String
+from std_msgs.msg import String, Bool
 from moveit_commander.conversions import pose_to_list
 from geometry_msgs.msg import PoseArray
+
+from controller_manager_msgs.srv import SwitchController
 
 
 def all_close(goal, actual, tolerance):
@@ -62,8 +64,16 @@ class MoveGroupPythonIntefacelistener(object):
     self.group_names = group_names
 
     subs = rospy.Subscriber('waypoints', PoseArray, self.waypoint_callback)
+    subs = rospy.Subscriber('trajectory_success', Bool, self.success_callback)
     self.new_wps = []
     self.got_waypoints = False
+
+    rospy.wait_for_service('/controller_manager/switch_controller')
+    self.switch_controller = rospy.ServiceProxy('/controller_manager/switch_controller', SwitchController)
+
+  def success_callback(self, data):
+      self.new_wps = []
+      self.got_waypoints = False
 
   def waypoint_callback(self, data):
 
@@ -137,7 +147,7 @@ def main():
         try:
             if listener.got_waypoints:
 
-                listener.got_waypoints = False
+                # listener.got_waypoints = False
 
                 print "\n\n\n\n\n"
                 print listener.group.get_current_pose().pose.orientation
@@ -155,10 +165,15 @@ def main():
                 resp = 'n'
                 resp = raw_input("Proceed with plan? y/N \n")
                 if 'y' in resp or 'Y' in resp:
-                    listener.execute_plan(cartesian_plan)
+                    ret = listener.switch_controller(['position_joint_trajectory_controller'], ['impedant_explorer'], 2)
+                    print ("controller switching result: ")
+                    print(ret)
+                    resp = raw_input("Controller switched? y/N \n")
+                    if 'y' in resp or 'Y' in resp:            
+                        listener.execute_plan(cartesian_plan)
                 else:
-                    print("Aborting plan...")
-                listener.new_wps = []
+                    print("Trying again...")
+                # listener.new_wps = []
 
             time.sleep(1)
         except rospy.ROSInterruptException:
