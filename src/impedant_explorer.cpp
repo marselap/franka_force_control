@@ -989,8 +989,8 @@ Eigen::Matrix<double, 6, 1> ImpedantExplorer::impedanceOpenLoop(
     // rot_vel[1] = f_ext[4];
 
 
-    rot_vel[0] += f_ext[3];
-    rot_vel[1] += f_ext[4];
+    rot_vel[0] += 1.0*f_ext[3];
+    rot_vel[1] += 1.0* f_ext[4];
 
 
     // rot_vel[2] -= f_ext[5];
@@ -1047,7 +1047,6 @@ Eigen::Matrix<double, 3, 1> ImpedantExplorer::wiggle(float velocity_amplitude) {
     float rand_vec_ampl = 0.;
     for(int i = 0; i < 3; i++){
       rand_vec[i] = LO + static_cast <float> (rand()) /( static_cast <float> (RAND_MAX/(HI-LO)));
-      // rand_vec_ampl += pow(rand_vec[i], 2.);
     }
 
     float prob = static_cast <float> (rand()) /( static_cast <float> (RAND_MAX));
@@ -1058,11 +1057,10 @@ Eigen::Matrix<double, 3, 1> ImpedantExplorer::wiggle(float velocity_amplitude) {
       if (loc_d_x_ < 0.) {
         predznak *= -1.;
       }
-      if (prob > 0.3) {
+      if (prob > 0.1) {
         predznak *= -1.;
       }
       rand_vec[0] = 0.3 * rand_vec[0];
-      // rand_vec[1] = 0.3 * rand_vec[1];
       rand_vec[1] = predznak * fabs(rand_vec[1]);
       rand_vec[2] = 0.3 * rand_vec[2];
     }

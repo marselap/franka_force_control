@@ -29,6 +29,8 @@ class MoveGroupPythonIntefacelistener(object):
     subs2 = rospy.Subscriber('/franka_state_controller/franka_states', FrankaState, self.franka_state_callback)
     subs3 = rospy.Subscriber('cluster', Bool, self.waypoints_request_cb)
 
+    subs = rospy.Subscriber('trajectory_success', Bool, self.success_callback)
+
     self.waypoints_pub = rospy.Publisher('waypoints', PoseArray, queue_size=1)
 
     self.save_points = False
@@ -44,7 +46,9 @@ class MoveGroupPythonIntefacelistener(object):
 
     self.xdir = 1.
 
+  def success_callback(self, data):
 
+    self.experiments = []
 
   def exploration_callback(self, data):
 
@@ -95,7 +99,7 @@ class MoveGroupPythonIntefacelistener(object):
     print data[1,:]
     print ranges
 
-    n_clusters = int(np.linalg.norm(ranges)/0.03)
+    n_clusters = int(np.linalg.norm(ranges)/0.02)
 
     print("n clusters: ", n_clusters)
 
@@ -337,7 +341,7 @@ def main():
               listener.waypoints_pub.publish(waypoints_msg)
 
               listener.waypoints_request = False
-              listener.experiments = []
+
 
             r.sleep()
         except rospy.ROSInterruptException:
